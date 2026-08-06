@@ -1,0 +1,23 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Node
+node_modules/
+dist/
+build/
+
+# VS Code
+.vscode/
+
+# Zip files
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,102 @@
+[
+  {
+    "feature": "early_likes",
+    "mean_abs_shap": 0.05394
+  },
+  {
+    "feature": "impressions",
+    "mean_abs_shap": 0.04068
+  },
+  {
+    "feature": "saves",
+    "mean_abs_shap": 0.02848
+  },
+  {
+    "feature": "early_shares",
+    "mean_abs_shap": 0.02174
+  },
+  {
+    "feature": "dog jumping",
+    "mean_abs_shap": 0.02089
+  },
+  {
+    "feature": "dog runs",
+    "mean_abs_shap": 0.02002
+  },
+  {
+    "feature": "reach",
+    "mean_abs_shap": 0.01496
+  },
+  {
+    "feature": "brown dogs",
+    "mean_abs_shap": 0.01059
+  },
+  {
+    "feature": "soccer ball",
+    "mean_abs_shap": 0.0097
+  },
+  {
+    "feature": "uniform",
+    "mean_abs_shap": 0.00951
+  },
+  {
+    "feature": "chases",
+    "mean_abs_shap": 0.00922
+  },
+  {
+    "feature": "girl wearing",
+    "mean_abs_shap": 0.00883
+  },
+  {
+    "feature": "covered",
+    "mean_abs_shap": 0.00881
+  },
+  {
+    "feature": "stick mouth",
+    "mean_abs_shap": 0.00855
+  },
+  {
+    "feature": "orange",
+    "mean_abs_shap": 0.00851
+  },
+  {
+    "feature": "walks",
+    "mean_abs_shap": 0.00835
+  },
+  {
+    "feature": "sidewalk",
+    "mean_abs_shap": 0.00799
+  },
+  {
+    "feature": "pool",
+    "mean_abs_shap": 0.00794
+  },
+  {
+    "feature": "climbing",
+    "mean_abs_shap": 0.00718
+  },
+  {
+    "feature": "racing",
+    "mean_abs_shap": 0.00696
+  },
+  {
+    "feature": "white shirt",
+    "mean_abs_shap": 0.00691
+  },
+  {
+    "feature": "large",
+    "mean_abs_shap": 0.00658
+  },
+  {
+    "feature": "boat",
+    "mean_abs_shap": 0.00658
+  },
+  {
+    "feature": "early_comments",
+    "mean_abs_shap": 0.00651
+  },
+  {
+    "feature": "stand",
+    "mean_abs_shap": 0.00651
+  }
+]

@@ -1,0 +1,34 @@
+[
+  {
+    "model":"Random Forest",
+    "accuracy":0.9044,
+    "precision":0.7775,
+    "recall":0.865,
+    "f1_score":0.8189,
+    "roc_auc":0.9648
+  },
+  {
+    "model":"SVM",
+    "accuracy":0.885,
+    "precision":0.7053,
+    "recall":0.9275,
+    "f1_score":0.8013,
+    "roc_auc":0.9587
+  },
+  {
+    "model":"XGBoost",
+    "accuracy":0.94,
+    "precision":0.847,
+    "recall":0.9275,
+    "f1_score":0.8854,
+    "roc_auc":0.9844
+  },
+  {
+    "model":"Ensemble (Voting)",
+    "accuracy":0.9375,
+    "precision":0.8488,
+    "recall":0.9125,
+    "f1_score":0.8795,
+    "roc_auc":0.9803
+  }
+]

@@ -1,0 +1,31 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "User profiles created on sign up",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "predictions": {
+      "title": "Predictions",
+      "description": "Multimodal virality prediction history saved by users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "platform": { "type": "string" },
+        "captionSnippet": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "viralityScore": { "type": "number" },
+        "confidence": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "platform", "viralityScore"]
+    }
+  }
+}
