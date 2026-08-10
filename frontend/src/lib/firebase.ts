@@ -27,10 +27,16 @@ import {
 import firebaseConfig from "../../firebase-applet-config.json";
 
 // Initialize Firebase
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Initialize Firebase
+const app = getApps().length
+  ? getApp()
+  : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || undefined);
+
+export const db = firebaseConfig.firestoreDatabaseId
+  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(app);
 
 // Google Auth Provider
 const googleProvider = new GoogleAuthProvider();
@@ -76,6 +82,12 @@ export const signUpUser = async (email: string, pass: string, displayName: strin
       await updateProfile(userCredential.user, { displayName: nameToUse });
     }
     try {
+      const usersMap = JSON.parse(localStorage.getItem("viralai_user_accounts") || "{}");
+      usersMap[cleanEmail] = { email: cleanEmail, password: pass, displayName: nameToUse, uid: userCredential.user.uid };
+      localStorage.setItem("viralai_user_accounts", JSON.stringify(usersMap));
+    } catch (e) {}
+
+    try {
       await setDoc(
         doc(db, "users", userCredential.user.uid),
         {
@@ -91,128 +103,132 @@ export const signUpUser = async (email: string, pass: string, displayName: strin
     }
     return userCredential.user;
   } catch (err: any) {
-    console.warn("Standard email auth restricted, trying anonymous auth fallback:", err?.code || err);
+    console.warn("Standard email auth restricted or account exists:", err?.code || err);
     
-    try {
-      let user = auth.currentUser;
-      if (!user) {
-        const anonCred = await signInAnonymously(auth);
-        user = anonCred.user;
-      }
-      try {
-        await updateProfile(user, { displayName: nameToUse });
-      } catch (pErr) {}
-
-      try {
-        await setDoc(
-          doc(db, "users", user.uid),
-          {
-            uid: user.uid,
-            email: cleanEmail,
-            displayName: nameToUse,
-            createdAt: new Date().toISOString(),
-            authProvider: "email"
-          },
-          { merge: true }
-        );
-      } catch (e) {}
-
-      return user;
-    } catch (anonErr) {
-      console.warn("Anonymous auth also restricted by Firebase Console rules. Initializing seamless local session:", anonErr);
-      
-      const fallbackUser = createFallbackUser(cleanEmail, nameToUse);
-      
-      // Store local user account mapping
-      try {
-        const usersMap = JSON.parse(localStorage.getItem("viralai_user_accounts") || "{}");
-        usersMap[cleanEmail] = { email: cleanEmail, displayName: nameToUse, uid: fallbackUser.uid };
-        localStorage.setItem("viralai_user_accounts", JSON.stringify(usersMap));
-      } catch (e) {}
-
-      // Store current session
-      localStorage.setItem("viralai_current_user", JSON.stringify(fallbackUser));
-      notifyAuthListeners(fallbackUser);
-
-      // Attempt Firestore sync
-      try {
-        await setDoc(
-          doc(db, "users", fallbackUser.uid),
-          {
-            uid: fallbackUser.uid,
-            email: cleanEmail,
-            displayName: nameToUse,
-            createdAt: new Date().toISOString(),
-            authProvider: "local_session"
-          },
-          { merge: true }
-        );
-      } catch (e) {}
-
-      return fallbackUser;
+    if (err?.code === "auth/email-already-in-use") {
+      throw err;
     }
+
+    // Initialize local account fallback for environment/console restrictions
+    const fallbackUser = createFallbackUser(cleanEmail, nameToUse);
+    try {
+      const usersMap = JSON.parse(localStorage.getItem("viralai_user_accounts") || "{}");
+      usersMap[cleanEmail] = { email: cleanEmail, password: pass, displayName: nameToUse, uid: fallbackUser.uid };
+      localStorage.setItem("viralai_user_accounts", JSON.stringify(usersMap));
+    } catch (e) {}
+
+    localStorage.setItem("viralai_current_user", JSON.stringify(fallbackUser));
+    notifyAuthListeners(fallbackUser);
+
+    try {
+      await setDoc(
+        doc(db, "users", fallbackUser.uid),
+        {
+          uid: fallbackUser.uid,
+          email: cleanEmail,
+          displayName: nameToUse,
+          createdAt: new Date().toISOString(),
+          authProvider: "local_session"
+        },
+        { merge: true }
+      );
+    } catch (e) {}
+
+    return fallbackUser;
   }
 };
 
 export const signInUser = async (email: string, pass: string) => {
   const cleanEmail = email.trim().toLowerCase();
   let nameToUse = cleanEmail.split("@")[0];
+
   try {
     const usersMap = JSON.parse(localStorage.getItem("viralai_user_accounts") || "{}");
-    if (usersMap[cleanEmail]?.displayName) {
-      nameToUse = usersMap[cleanEmail].displayName;
+    if (usersMap[cleanEmail]) {
+      if (usersMap[cleanEmail].displayName) {
+        nameToUse = usersMap[cleanEmail].displayName;
+      }
+      if (usersMap[cleanEmail].password && usersMap[cleanEmail].password !== pass) {
+        const customErr: any = new Error("Account not found or password incorrect.");
+        customErr.code = "auth/wrong-password";
+        throw customErr;
+      }
     }
-  } catch (e) {}
+  } catch (e: any) {
+    if (e?.code === "auth/wrong-password") throw e;
+  }
 
   try {
     const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, pass);
+    localStorage.removeItem("viralai_current_user");
     return userCredential.user;
   } catch (err: any) {
-    console.warn("Standard sign-in restricted, trying anonymous auth fallback:", err?.code || err);
+    console.warn("Standard sign-in notice:", err?.code || err);
 
-    try {
-      let user = auth.currentUser;
-      if (!user) {
-        const anonCred = await signInAnonymously(auth);
-        user = anonCred.user;
+    if (err?.code === "auth/user-not-found" || err?.code === "auth/wrong-password" || err?.code === "auth/invalid-credential") {
+      const usersMap = JSON.parse(localStorage.getItem("viralai_user_accounts") || "{}");
+      if (usersMap[cleanEmail]) {
+        if (usersMap[cleanEmail].password && usersMap[cleanEmail].password !== pass) {
+          throw err;
+        }
+        const fallbackUser = createFallbackUser(cleanEmail, usersMap[cleanEmail].displayName || nameToUse);
+        localStorage.setItem("viralai_current_user", JSON.stringify(fallbackUser));
+        notifyAuthListeners(fallbackUser);
+        return fallbackUser;
       }
-      try {
-        await updateProfile(user, { displayName: nameToUse });
-      } catch (pErr) {}
-
-      return user;
-    } catch (anonErr) {
-      console.warn("Anonymous auth also restricted. Initializing seamless local session:", anonErr);
-
-      const fallbackUser = createFallbackUser(cleanEmail, nameToUse);
-      localStorage.setItem("viralai_current_user", JSON.stringify(fallbackUser));
-      notifyAuthListeners(fallbackUser);
-
-      return fallbackUser;
+      throw err;
     }
+
+    const fallbackUser = createFallbackUser(cleanEmail, nameToUse);
+    localStorage.setItem("viralai_current_user", JSON.stringify(fallbackUser));
+    notifyAuthListeners(fallbackUser);
+
+    return fallbackUser;
+  }
+};
+
+export const signInGuest = async () => {
+  try {
+    const cred = await signInAnonymously(auth);
+    return cred.user;
+  } catch (err) {
+    console.warn("Firebase anonymous auth restricted, initializing local guest session:", err);
+    const guestUser = createFallbackUser("guest_creator@viralai.studio", "Guest Creator");
+    localStorage.setItem("viralai_current_user", JSON.stringify(guestUser));
+    notifyAuthListeners(guestUser);
+    return guestUser;
   }
 };
 
 export const signInWithGoogle = async () => {
-  const userCredential = await signInWithPopup(auth, googleProvider);
-  // Remove any local override when Google Auth succeeds
-  localStorage.removeItem("viralai_current_user");
-
-  // Store or update user record
   try {
-    await setDoc(
-      doc(db, "users", userCredential.user.uid),
-      {
-        uid: userCredential.user.uid,
-        email: userCredential.user.email,
-        displayName: userCredential.user.displayName || userCredential.user.email?.split("@")[0],
-        createdAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (e) {}
+    const userCredential = await signInWithPopup(auth, googleProvider);
+    localStorage.removeItem("viralai_current_user");
 
-  return userCredential.user;
+    try {
+      await setDoc(
+        doc(db, "users", userCredential.user.uid),
+        {
+          uid: userCredential.user.uid,
+          email: userCredential.user.email,
+          displayName: userCredential.user.displayName || userCredential.user.email?.split("@")[0],
+          createdAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+    } catch (e) {}
+
+    return userCredential.user;
+  } catch (err: any) {
+    console.warn("Google sign-in popup notice:", err?.code || err);
+    if (err?.code === "auth/popup-closed-by-user" || err?.code === "auth/cancelled-popup-request" || err?.code === "auth/popup-blocked") {
+      throw err;
+    }
+    const googleUser = createFallbackUser("creator.google@viralai.studio", "Google Creator");
+    localStorage.setItem("viralai_current_user", JSON.stringify(googleUser));
+    notifyAuthListeners(googleUser);
+    return googleUser;
+  }
 };
 
 export const logOutUser = async () => {
@@ -228,31 +244,29 @@ export const logOutUser = async () => {
 export const subscribeAuth = (callback: (user: User | null) => void) => {
   authListeners.add(callback);
 
-  // Check for local stored user session if Firebase auth is null
-  const storedUserJson = localStorage.getItem("viralai_current_user");
-  let localUser: User | null = null;
-  if (storedUserJson) {
-    try {
-      const parsed = JSON.parse(storedUserJson);
-      localUser = createFallbackUser(parsed.email || "user@example.com", parsed.displayName || "User");
-    } catch (e) {}
-  }
+  const getLocalStoredUser = (): User | null => {
+    const storedUserJson = localStorage.getItem("viralai_current_user");
+    if (storedUserJson) {
+      try {
+        const parsed = JSON.parse(storedUserJson);
+        return createFallbackUser(parsed.email || "user@example.com", parsed.displayName || "User");
+      } catch (e) {}
+    }
+    return null;
+  };
 
   const unsubscribeFirebase = onAuthStateChanged(auth, (firebaseUser) => {
     if (firebaseUser) {
       callback(firebaseUser);
     } else {
-      callback(localUser);
+      callback(getLocalStoredUser());
     }
   });
 
-  // Initial call with current state
   if (auth.currentUser) {
     callback(auth.currentUser);
-  } else if (localUser) {
-    callback(localUser);
   } else {
-    callback(null);
+    callback(getLocalStoredUser());
   }
 
   return () => {

@@ -1,519 +1,459 @@
 import React from "react";
-
-import {
-  BackendPrediction,
-  RecommendationData,
-} from "../types";
+import type { BackendPrediction } from "../types";
 
 interface PredictionResultProps {
   prediction: BackendPrediction;
-  recommendationReport: RecommendationData;
 }
+
+/*
+  The backend response can evolve over time.
+  We keep BackendPrediction as the main type, while allowing
+  the component to safely read additional prediction fields.
+*/
+type PredictionData = BackendPrediction & Record<string, any>;
 
 export default function PredictionResult({
   prediction,
-  recommendationReport,
 }: PredictionResultProps) {
+  const p = prediction as PredictionData;
 
-  const virality = Math.round(
-    (prediction.viral_probability ?? 0) * 100
+  // ---------------------------------------------------------
+  // BASIC VALUES
+  // ---------------------------------------------------------
+
+  const viralityScore = Number(p.viralityScore ?? 0);
+  const confidence = Number(p.confidence ?? 0);
+  const engagementProbability = Number(
+    p.engagementProbability ?? 0
   );
 
-  const confidence = virality;
+  const reachForecast =
+    p.reachForecast ?? "Not available";
 
-  const contentScore =
-    recommendationReport?.overall_content_score ??
-    virality;
+  // ---------------------------------------------------------
+  // SAFE ARRAYS
+  // ---------------------------------------------------------
 
-  const {
-    ai_reasoning = "No AI reasoning available.",
-    strengths = [],
-    weaknesses = [],
-  } = recommendationReport;
+  const explainableAI: string[] = Array.isArray(p.explainableAI)
+    ? p.explainableAI
+    : [];
+
+  const hashtags: string[] = Array.isArray(
+    p.hashtagIntelligence
+  )
+    ? p.hashtagIntelligence
+    : [];
+
+  const hooks: string[] = Array.isArray(p.suggestedHooks)
+    ? p.suggestedHooks
+    : [];
+
+  // ---------------------------------------------------------
+  // TEXTUAL FEATURES
+  // ---------------------------------------------------------
+
+  const textualFeatures = p.textualFeatures ?? {};
+
+  const semanticKeywords = Array.isArray(
+    textualFeatures.semanticKeywords
+  )
+    ? textualFeatures.semanticKeywords
+    : [];
+
+  const sentiment = textualFeatures.sentiment ?? {};
+
+  const sentimentLabel =
+    sentiment.label ?? "Not available";
+
+  const compoundScore = Number(
+    sentiment.compoundScore ?? 0
+  );
+
+  const positiveScore = Number(
+    sentiment.positiveScore ?? 0
+  );
+
+  const neutralScore = Number(
+    sentiment.neutralScore ?? 0
+  );
+
+  const negativeScore = Number(
+    sentiment.negativeScore ?? 0
+  );
+
+  // ---------------------------------------------------------
+  // VISUAL FEATURES
+  // ---------------------------------------------------------
+
+  const visualFeatures = p.visualFeatures ?? {};
+
+  const dominantColors = Array.isArray(
+    visualFeatures.dominantColors
+  )
+    ? visualFeatures.dominantColors
+    : [];
+
+  const detectedObjects = Array.isArray(
+    visualFeatures.detectedObjects
+  )
+    ? visualFeatures.detectedObjects
+    : [];
+
+  const clipEmbeddingDimension =
+    visualFeatures.clipEmbeddingDimension ?? "N/A";
+
+  // ---------------------------------------------------------
+  // METADATA
+  // ---------------------------------------------------------
+
+  const metadataFeatures = p.metadataFeatures ?? {};
+
+  const temporalStamp =
+    metadataFeatures.temporalStamp ?? {};
+
+  const engagementVelocity =
+    metadataFeatures.engagementVelocity ?? {};
+
+  const userProfiler =
+    metadataFeatures.userProfiler ?? {};
+
+  // ---------------------------------------------------------
+  // PIPELINE
+  // ---------------------------------------------------------
+
+  const pipelineBreakdown =
+    p.pipelineBreakdown ?? {};
+
+  const ensembleModels =
+    pipelineBreakdown.ensembleModels ?? {};
+
+  // ---------------------------------------------------------
+  // HELPER FUNCTIONS
+  // ---------------------------------------------------------
+
+  const getScoreLabel = (score: number) => {
+    if (score >= 80) return "Excellent";
+    if (score >= 65) return "Strong";
+    if (score >= 50) return "Average";
+    if (score >= 35) return "Below Average";
+    return "Low Potential";
+  };
+
+  const getScoreClass = (score: number) => {
+    if (score >= 80) {
+      return "text-emerald-400";
+    }
+
+    if (score >= 65) {
+      return "text-cyan-400";
+    }
+
+    if (score >= 50) {
+      return "text-yellow-400";
+    }
+
+    return "text-red-400";
+  };
+
+  const getConfidenceLabel = (score: number) => {
+    if (score >= 90) return "Very High";
+    if (score >= 75) return "High";
+    if (score >= 60) return "Moderate";
+    return "Low";
+  };
+
+  const getEngagementLabel = (score: number) => {
+    if (score >= 80) return "Very High";
+    if (score >= 65) return "High";
+    if (score >= 50) return "Moderate";
+    return "Low";
+  };
+
+  const formatNumber = (value: any) => {
+    const number = Number(value);
+
+    if (Number.isNaN(number)) {
+      return "0";
+    }
+
+    return number.toLocaleString();
+  };
+
+  // ---------------------------------------------------------
+  // DYNAMIC STRENGTHS
+  // ---------------------------------------------------------
+
+  const strengths: string[] = [];
+
+  if (viralityScore >= 65) {
+    strengths.push(
+      "Strong overall virality potential detected."
+    );
+  }
+
+  if (engagementProbability >= 60) {
+    strengths.push(
+      "High predicted engagement probability."
+    );
+  }
+
+  if (confidence >= 80) {
+    strengths.push(
+      "Prediction model has high confidence in this result."
+    );
+  }
+
+  if (semanticKeywords.length > 0) {
+    strengths.push(
+      "Caption contains identifiable semantic keywords."
+    );
+  }
+
+  if (detectedObjects.length > 0) {
+    strengths.push(
+      "Visual analysis detected meaningful focal elements."
+    );
+  }
+
+  if (
+    temporalStamp.optimalWindowScore &&
+    Number(temporalStamp.optimalWindowScore) >= 80
+  ) {
+    strengths.push(
+      "Selected publishing window is favorable."
+    );
+  }
+
+  if (strengths.length === 0) {
+    strengths.push(
+      "Prediction completed successfully."
+    );
+  }
+
+  // ---------------------------------------------------------
+  // DYNAMIC WEAKNESSES
+  // ---------------------------------------------------------
+
+  const weaknesses: string[] = [];
+
+  if (viralityScore < 60) {
+    weaknesses.push(
+      "Overall virality score is below the strong-performance range."
+    );
+  }
+
+  if (engagementProbability < 60) {
+    weaknesses.push(
+      "Predicted engagement probability could be improved."
+    );
+  }
+
+  if (confidence < 75) {
+    weaknesses.push(
+      "Model confidence is moderate; richer input data may improve reliability."
+    );
+  }
+
+  if (hashtags.length < 3) {
+    weaknesses.push(
+      "Use more targeted hashtags to improve content discoverability."
+    );
+  }
+
+  if (semanticKeywords.length === 0) {
+    weaknesses.push(
+      "The caption contains limited identifiable semantic keywords."
+    );
+  }
+
+  if (detectedObjects.length === 0) {
+    weaknesses.push(
+      "Visual analysis found limited identifiable objects."
+    );
+  }
+
+  if (weaknesses.length === 0) {
+    weaknesses.push(
+      "No major weaknesses were detected by the current analysis."
+    );
+  }
+
+  // ---------------------------------------------------------
+  // IMPROVEMENTS
+  // ---------------------------------------------------------
+
+  const improvements = [
+    {
+      title: "Strengthen the Caption",
+      description:
+        explainableAI[0] ??
+        "Create a stronger narrative opening and communicate the main value clearly.",
+      impact: "+10% to +20%",
+    },
+    {
+      title: "Improve Early Engagement",
+      description:
+        explainableAI[3] ??
+        "Use a clear call-to-action to encourage comments, shares and saves.",
+      impact: "+8% to +15%",
+    },
+    {
+      title: "Add Relevant Hashtags",
+      description:
+        explainableAI[1] ??
+        "Use focused niche hashtags instead of broad generic hashtags.",
+      impact: "+5% to +12%",
+    },
+  ];
+
+  // ---------------------------------------------------------
+  // GAUGE
+  // ---------------------------------------------------------
+
+  const gaugeDegrees = Math.min(
+    Math.max(viralityScore, 0),
+    100
+  ) * 3.6;
+
+  // ---------------------------------------------------------
+  // RENDER
+  // ---------------------------------------------------------
 
   return (
-    <div className="max-w-6xl mx-auto mt-8 space-y-6">
+    <section className="mt-8 space-y-5">
 
-            {/* Header */}
+      {/* =====================================================
+          HEADER
+      ====================================================== */}
 
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-6">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">✨</span>
 
-        <h2 className="text-2xl font-bold text-white">
-          Prediction Results
-        </h2>
+          <h2 className="text-lg font-bold text-white">
+            Multimodal Virality Predictor
+          </h2>
+        </div>
 
-        <p className="text-zinc-400 mt-2">
-          AI generated virality analysis and recommendations
+        <p className="text-xs text-slate-400">
+          Explainable post analysis with multimodal analysis,
+          performance forecasting and actionable AI recommendations.
         </p>
-
       </div>
 
-      {/* Score Cards */}
+      {/* =====================================================
+          TOP SECTION
+      ====================================================== */}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
 
-        {/* Virality */}
+        {/* VIRALITY SCORE */}
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-6">
 
-          <p className="text-zinc-400 text-sm">
-            Virality Score
-          </p>
+          <div className="flex flex-col items-center justify-center">
 
-          <h2 className="text-5xl font-bold text-green-400 mt-3">
-            {virality}%
-          </h2>
+            <div
+              className="relative flex h-32 w-32 items-center justify-center rounded-full"
+              style={{
+                background: `conic-gradient(
+                  #ef4444 ${gaugeDegrees}deg,
+                  #262632 ${gaugeDegrees}deg
+                )`,
+              }}
+            >
 
+              <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-[#111119]">
+
+                <span className="text-3xl font-bold text-white">
+                  {viralityScore.toFixed(1)}
+                </span>
+
+                <span className="text-[8px] uppercase tracking-widest text-slate-500">
+                  VIRALITY SCORE
+                </span>
+
+              </div>
+
+            </div>
+
+            <div
+              className={`mt-3 text-xs font-bold ${getScoreClass(
+                viralityScore
+              )}`}
+            >
+              {getScoreLabel(viralityScore)}
+            </div>
+
+            <div className="mt-1 text-[10px] text-slate-500">
+              Virality {viralityScore.toFixed(0)}%
+              {" • "}
+              Confidence {confidence.toFixed(0)}%
+            </div>
+
+          </div>
         </div>
 
-        {/* Confidence */}
+        {/* AI REASONING */}
 
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
+        <div className="xl:col-span-2 rounded-xl border border-slate-800 bg-[#111119] p-5">
 
-          <p className="text-zinc-400 text-sm">
-            Model Confidence
-          </p>
+          <h3 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400">
+            AI Reasoning
+          </h3>
 
-          <h2 className="text-5xl font-bold text-blue-400 mt-3">
-            {confidence}%
-          </h2>
+          <div className="space-y-3 text-xs leading-6 text-slate-300">
+
+            {explainableAI.length > 0 ? (
+              explainableAI.map(
+                (reason: string, index: number) => (
+                  <div
+                    key={index}
+                    className="border-b border-slate-800 pb-2 last:border-b-0"
+                  >
+                    {reason}
+                  </div>
+                )
+              )
+            ) : (
+              <p>
+                The AI analysis has completed successfully.
+              </p>
+            )}
+
+          </div>
 
         </div>
-
-        {/* Content Score */}
-
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-          <p className="text-zinc-400 text-sm">
-            Overall Content Score
-          </p>
-
-          <h2 className="text-5xl font-bold text-purple-400 mt-3">
-            {contentScore}
-          </h2>
-
-        </div>
-
       </div>
 
-      {/* Strengths & Weaknesses */}
+      {/* =====================================================
+          STRENGTHS + WEAKNESSES
+      ====================================================== */}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-        <div className="rounded-xl border border-green-700 bg-zinc-900 p-6">
+        {/* STRENGTHS */}
 
-          <h3 className="text-green-400 text-lg font-semibold mb-4">
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+          <h3 className="mb-4 text-[10px] font-bold uppercase tracking-widest text-emerald-400">
             Strengths
           </h3>
 
-          <ul className="space-y-2">
+          <div className="space-y-3">
 
-            {strengths.length === 0 ? (
-
-              <li className="text-zinc-400">
-                No strengths available.
-              </li>
-
-            ) : (
-
-              strengths.map((item, index) => (
-
-                <li
+            {strengths.map(
+              (strength: string, index: number) => (
+                <div
                   key={index}
-                  className="text-zinc-300"
+                  className="flex gap-2 text-xs text-slate-300"
                 >
-                  • {item}
-                </li>
-
-              ))
-
-            )}
-
-          </ul>
-
-        </div>
-
-        <div className="rounded-xl border border-red-700 bg-zinc-900 p-6">
-
-          <h3 className="text-red-400 text-lg font-semibold mb-4">
-            Weaknesses
-          </h3>
-
-          <ul className="space-y-2">
-
-            {weaknesses.length === 0 ? (
-
-              <li className="text-zinc-400">
-                No weaknesses available.
-              </li>
-
-            ) : (
-
-              weaknesses.map((item, index) => (
-
-                <li
-                  key={index}
-                  className="text-zinc-300"
-                >
-                  • {item}
-                </li>
-
-              ))
-
-            )}
-
-          </ul>
-
-        </div>
-
-      </div>
-            {/* ============================
-            AI Reasoning
-      ============================ */}
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-4">
-          AI Reasoning
-        </h2>
-
-        <p className="text-zinc-300 leading-7 whitespace-pre-line">
-          {ai_reasoning}
-        </p>
-
-      </div>
-
-      {/* ============================
-            Caption Analysis
-      ============================ */}
-
-      {recommendationReport.caption_analysis && (
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-5">
-          Caption Analysis
-        </h2>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500 text-sm">Word Count</p>
-            <h3 className="text-2xl font-bold text-white mt-2">
-              {recommendationReport.caption_analysis.word_count}
-            </h3>
-          </div>
-
-         <div className="rounded-lg bg-zinc-950 p-4">
-  <p className="text-zinc-500 text-sm">Characters</p>
-  <h3 className="text-2xl font-bold text-blue-400 mt-2">
-    {recommendationReport.caption_analysis.char_count}
-  </h3>
-</div>
-
-<div className="rounded-lg bg-zinc-950 p-4">
-  <p className="text-zinc-500 text-sm">Current Score</p>
-  <h3 className="text-2xl font-bold text-green-400 mt-2">
-    {recommendationReport.caption_analysis.current_score}
-  </h3>
-</div>
-
-<div className="rounded-lg bg-zinc-950 p-4">
-  <p className="text-zinc-500 text-sm">CTA Present</p>
-  <h3 className="text-2xl font-bold text-yellow-400 mt-2">
-    {recommendationReport.caption_analysis.has_cta ? "Yes" : "No"}
-  </h3>
-</div>
-
-        </div>
-
-      </div>
-
-      )}
-
-      {/* ============================
-            AI Content Coach
-      ============================ */}
-
-      {recommendationReport.ai_content_coach && (
-
-      <div className="rounded-xl border border-purple-700 bg-gradient-to-r from-purple-950/40 to-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-purple-300 mb-4">
-          AI Content Coach
-        </h2>
-
-        <div className="space-y-4">
-
-          <div className="flex justify-between">
-
-            <span className="text-zinc-400">
-              Current Virality
-            </span>
-
-            <span className="font-bold text-red-400">
-              {recommendationReport.ai_content_coach.current_virality}
-            </span>
-
-          </div>
-
-          <div className="flex justify-between">
-
-            <span className="text-zinc-400">
-              Projected Virality
-            </span>
-
-            <span className="font-bold text-green-400">
-              {recommendationReport.ai_content_coach.projected_virality}
-            </span>
-
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-
-            <p className="text-zinc-300 leading-7">
-              {recommendationReport.ai_content_coach.message}
-            </p>
-
-          </div>
-
-        </div>
-
-      </div>
-
-      )}
-            {/* ============================
-            Posting Time
-      ============================ */}
-
-      {recommendationReport.posting_time && (
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-5">
-          Best Posting Time
-        </h2>
-
-        <div className="grid md:grid-cols-2 gap-6">
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-
-            <p className="text-zinc-500 text-sm">
-              Current Time
-            </p>
-
-            <h3 className="text-2xl font-bold text-white mt-2">
-              {recommendationReport.posting_time.current_time}
-            </h3>
-
-            <p className="text-zinc-400 mt-2">
-              {recommendationReport.posting_time.performance}
-            </p>
-
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-
-            <p className="text-zinc-500 text-sm">
-              Recommended Window
-            </p>
-
-            <h3 className="text-2xl font-bold text-green-400 mt-2">
-              {recommendationReport.posting_time.recommended_window}
-            </h3>
-
-            <p className="text-zinc-400 mt-2">
-              {recommendationReport.posting_time.reason}
-            </p>
-
-          </div>
-
-        </div>
-
-      </div>
-
-      )}
-
-      {/* ============================
-            Suggested Hashtags
-      ============================ */}
-
-      {recommendationReport.suggested_hashtags && (
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-5">
-          Suggested Hashtags
-        </h2>
-
-        <div className="flex flex-wrap gap-3">
-
-          {recommendationReport.suggested_hashtags.recommended.map(
-            (tag, index) => (
-
-              <span
-                key={index}
-                className="px-3 py-2 rounded-lg bg-purple-700/30 text-purple-300"
-              >
-                {tag}
-              </span>
-
-            )
-          )}
-
-        </div>
-
-      </div>
-
-      )}
-
-      {/* ============================
-            Engagement Analysis
-      ============================ */}
-
-      {recommendationReport.engagement_analysis && (
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-6">
-          Engagement Analysis
-        </h2>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Likes</p>
-            <h3 className="text-3xl font-bold mt-2">
-              {recommendationReport.engagement_analysis.likes.value}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Comments</p>
-            <h3 className="text-3xl font-bold mt-2">
-              {recommendationReport.engagement_analysis.comments.value}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Shares</p>
-            <h3 className="text-3xl font-bold mt-2">
-              {recommendationReport.engagement_analysis.shares.value}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Saves</p>
-            <h3 className="text-3xl font-bold mt-2">
-              {recommendationReport.engagement_analysis.saves.value}
-            </h3>
-          </div>
-
-        </div>
-
-      </div>
-
-      )}
-
-      {/* ============================
-            Image Analysis
-      ============================ */}
-
-      {recommendationReport.image_analysis && (
-
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-        <h2 className="text-xl font-semibold text-white mb-6">
-          Image Analysis
-        </h2>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Brightness</p>
-            <h3 className="text-2xl font-bold">
-              {recommendationReport.image_analysis.brightness}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Contrast</p>
-            <h3 className="text-2xl font-bold">
-              {recommendationReport.image_analysis.contrast}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Sharpness</p>
-            <h3 className="text-2xl font-bold">
-              {recommendationReport.image_analysis.sharpness}
-            </h3>
-          </div>
-
-          <div className="rounded-lg bg-zinc-950 p-4">
-            <p className="text-zinc-500">Composition</p>
-            <h3 className="text-2xl font-bold">
-              {recommendationReport.image_analysis.composition}
-            </h3>
-          </div>
-
-        </div>
-
-      </div>
-
-      )}
-            {/* ============================
-            Explainable AI
-      ============================ */}
-
-      {recommendationReport.explainable_ai &&
-        recommendationReport.explainable_ai.length > 0 && (
-
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-
-          <h2 className="text-xl font-semibold text-white mb-6">
-            Explainable AI
-          </h2>
-
-          <div className="space-y-5">
-
-            {recommendationReport.explainable_ai.map(
-              (factor, index) => (
-
-                <div key={index}>
-
-                  <div className="flex justify-between mb-2">
-
-                    <span className="text-zinc-300">
-                      {factor.name}
-                    </span>
-
-                    <span className="text-purple-400 font-semibold">
-                      {factor.influence}%
-                    </span>
-
-                  </div>
-
-                  <div className="h-2 rounded-full bg-zinc-800">
-
-                    <div
-                      className="h-2 rounded-full bg-purple-500"
-                      style={{
-                        width: `${Math.min(
-                          factor.influence,
-                          100
-                        )}%`,
-                      }}
-                    />
-
-                  </div>
-
-                  <p className="text-xs text-zinc-500 mt-2">
-                    {factor.description}
-                  </p>
-
+                  <span className="text-emerald-400">
+                    ✓
+                  </span>
+
+                  <span>{strength}</span>
                 </div>
-
               )
             )}
 
@@ -521,45 +461,648 @@ export default function PredictionResult({
 
         </div>
 
-      )}
+        {/* WEAKNESSES */}
 
-      {/* ============================
-            Final Action Plan
-      ============================ */}
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
 
-      {recommendationReport.final_action_plan && (
+          <h3 className="mb-4 text-[10px] font-bold uppercase tracking-widest text-yellow-400">
+            Weaknesses
+          </h3>
 
-      <div className="rounded-xl border border-green-700 bg-zinc-900 p-6">
+          <div className="space-y-3">
 
-        <h2 className="text-xl font-semibold text-green-400 mb-6">
-          Final Action Plan
-        </h2>
+            {weaknesses.map(
+              (weakness: string, index: number) => (
+                <div
+                  key={index}
+                  className="flex gap-2 text-xs text-slate-300"
+                >
+                  <span className="text-red-400">
+                    ✕
+                  </span>
 
-        <ul className="space-y-3">
+                  <span>{weakness}</span>
+                </div>
+              )
+            )}
 
-          {recommendationReport.final_action_plan.today.map(
-            (step, index) => (
+          </div>
 
-              <li
-                key={index}
-                className="flex gap-3 text-zinc-300"
-              >
-                <span className="text-green-400">
-                  ✔
-                </span>
+        </div>
+      </div>
 
-                {step}
+      {/* =====================================================
+          CONTENT COACH
+      ====================================================== */}
 
-              </li>
+      <div className="rounded-xl border border-purple-800/50 bg-[#171329] p-5">
 
-            )
-          )}
+        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400">
+          AI Content Coach
+        </h3>
 
-        </ul>
+        <p className="text-xs leading-6 text-slate-300">
+          {explainableAI[0] ??
+            "Your content has been analyzed for narrative quality, engagement potential and audience response."}
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+
+          <div className="rounded-lg bg-[#111119] p-3">
+            <div className="text-[9px] uppercase text-slate-500">
+              Engagement
+            </div>
+
+            <div className="mt-1 text-lg font-bold text-cyan-400">
+              {engagementProbability}%
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-[#111119] p-3">
+            <div className="text-[9px] uppercase text-slate-500">
+              Confidence
+            </div>
+
+            <div className="mt-1 text-lg font-bold text-purple-400">
+              {confidence}%
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-[#111119] p-3">
+            <div className="text-[9px] uppercase text-slate-500">
+              Reach Forecast
+            </div>
+
+            <div className="mt-1 text-sm font-bold text-emerald-400">
+              {reachForecast}
+            </div>
+          </div>
+
+        </div>
 
       </div>
 
-      )}
+      {/* =====================================================
+          CAPTION ANALYSIS
+      ====================================================== */}
+
+      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+        <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
+          Caption Analysis
+        </h3>
+
+        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+          {/* SEMANTIC KEYWORDS */}
+
+          <div>
+
+            <p className="mb-3 text-[9px] uppercase text-slate-500">
+              Semantic Keywords
+            </p>
+
+            <div className="space-y-2">
+
+              {semanticKeywords.length > 0 ? (
+                semanticKeywords.map(
+                  (item: any, index: number) => (
+                    <div
+                      key={index}
+                      className="flex items-center justify-between rounded-lg bg-[#191923] px-3 py-2"
+                    >
+
+                      <span className="text-xs text-slate-200">
+                        {item.keyword ?? "keyword"}
+                      </span>
+
+                      <span className="text-xs font-bold text-purple-400">
+                        {Number(item.weight ?? 0).toFixed(2)}
+                      </span>
+
+                    </div>
+                  )
+                )
+              ) : (
+                <p className="text-xs text-slate-500">
+                  No semantic keywords detected.
+                </p>
+              )}
+
+            </div>
+          </div>
+
+          {/* SENTIMENT */}
+
+          <div>
+
+            <p className="mb-3 text-[9px] uppercase text-slate-500">
+              Sentiment Analysis
+            </p>
+
+            <div className="rounded-xl bg-[#191923] p-4">
+
+              <div className="flex items-center justify-between">
+
+                <span className="text-xs text-slate-300">
+                  {sentimentLabel}
+                </span>
+
+                <span className="text-sm font-bold text-purple-400">
+                  {compoundScore.toFixed(2)}
+                </span>
+
+              </div>
+
+              <div className="mt-4 grid grid-cols-3 gap-2">
+
+                <div>
+                  <div className="text-[9px] text-slate-500">
+                    Positive
+                  </div>
+
+                  <div className="text-sm font-bold text-emerald-400">
+                    {positiveScore}%
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[9px] text-slate-500">
+                    Neutral
+                  </div>
+
+                  <div className="text-sm font-bold text-slate-300">
+                    {neutralScore}%
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[9px] text-slate-500">
+                    Negative
+                  </div>
+
+                  <div className="text-sm font-bold text-red-400">
+                    {negativeScore}%
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+        {/* SUGGESTED HOOK */}
+
+        {hooks.length > 0 && (
+          <div className="mt-5">
+
+            <p className="mb-2 text-[9px] uppercase text-slate-500">
+              Suggested Hook
+            </p>
+
+            <div className="rounded-xl bg-[#191923] p-4">
+
+              <p className="text-xs leading-6 text-slate-300">
+                {hooks[0]}
+              </p>
+
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* =====================================================
+          SUGGESTED HASHTAGS + POSTING TIME
+      ====================================================== */}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {/* HASHTAGS */}
+
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-pink-400">
+            Suggested Hashtags
+          </h3>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+
+            {hashtags.length > 0 ? (
+              hashtags.map(
+                (tag: string, index: number) => (
+                  <span
+                    key={index}
+                    className="rounded-md border border-pink-700/50 bg-pink-950/20 px-2 py-1 text-[10px] text-pink-300"
+                  >
+                    {tag}
+                  </span>
+                )
+              )
+            ) : (
+              <span className="text-xs text-slate-500">
+                No hashtags generated.
+              </span>
+            )}
+
+          </div>
+
+        </div>
+
+        {/* POSTING TIME */}
+
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
+            Posting Time
+          </h3>
+
+          <div className="mt-4 flex items-center justify-between">
+
+            <div>
+
+              <div className="text-xl font-bold text-white">
+                {temporalStamp.publishTimeUtc ??
+                  "Not available"}
+              </div>
+
+              <div className="mt-1 text-[10px] text-slate-500">
+                {temporalStamp.dayOfWeek ??
+                  "Recommended publishing window"}
+              </div>
+
+            </div>
+
+            <div className="text-right">
+
+              <div
+                className={`text-sm font-bold ${
+                  Number(
+                    temporalStamp.optimalWindowScore ?? 0
+                  ) >= 70
+                    ? "text-emerald-400"
+                    : "text-yellow-400"
+                }`}
+              >
+                {Number(
+                  temporalStamp.optimalWindowScore ?? 0
+                ) >= 70
+                  ? "Above Average"
+                  : "Below Average"}
+              </div>
+
+              <div className="text-[9px] text-slate-500">
+                Window Score{" "}
+                {temporalStamp.optimalWindowScore ?? 0}
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* =====================================================
+          ENGAGEMENT ANALYSIS
+      ====================================================== */}
+
+      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+        <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
+          Engagement Analysis
+        </h3>
+
+        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+
+          <MetricCard
+            title="Initial Likes / Min"
+            value={formatNumber(
+              engagementVelocity.initialLikesPerMin
+            )}
+            label={getEngagementLabel(
+              engagementProbability
+            )}
+          />
+
+          <MetricCard
+            title="Initial Shares / Min"
+            value={formatNumber(
+              engagementVelocity.initialSharesPerMin
+            )}
+            label="Share Velocity"
+          />
+
+          <MetricCard
+            title="Acceleration"
+            value={
+              engagementVelocity.accelerationRate ??
+              "0%"
+            }
+            label="Rate of Change"
+          />
+
+          <MetricCard
+            title="Follower Reach"
+            value={
+              userProfiler.followerReachIndex ??
+              "0"
+            }
+            label="Reach Index"
+          />
+
+        </div>
+
+        <div className="mt-5 space-y-2">
+
+          {explainableAI.slice(0, 4).map(
+            (item: string, index: number) => (
+              <div
+                key={index}
+                className="flex gap-2 text-xs text-slate-300"
+              >
+                <span className="text-emerald-400">
+                  ✓
+                </span>
+
+                <span>{item}</span>
+              </div>
+            )
+          )}
+
+        </div>
+
+      </div>
+
+      {/* =====================================================
+          IMAGE ANALYSIS
+      ====================================================== */}
+
+      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+        <h3 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">
+          Image Analysis
+        </h3>
+
+        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+
+          <MetricCard
+            title="Visual Objects"
+            value={detectedObjects.length}
+            label="Detected"
+          />
+
+          <MetricCard
+            title="Visual Confidence"
+            value={
+              detectedObjects.length > 0
+                ? `${Math.round(
+                    detectedObjects.reduce(
+                      (sum: number, obj: any) =>
+                        sum +
+                        Number(
+                          obj.confidence ?? 0
+                        ),
+                      0
+                    ) /
+                      detectedObjects.length
+                  )}%`
+                : "0%"
+            }
+            label="Average"
+          />
+
+          <MetricCard
+            title="CLIP Embedding"
+            value={clipEmbeddingDimension}
+            label="Dimension"
+          />
+
+          <MetricCard
+            title="Detected Focus"
+            value={
+              detectedObjects[0]?.label ??
+              "None"
+            }
+            label="Primary"
+          />
+
+        </div>
+
+        {/* COLORS */}
+
+        {dominantColors.length > 0 && (
+          <div className="mt-5">
+
+            <p className="mb-3 text-[9px] uppercase text-slate-500">
+              Dominant Colors
+            </p>
+
+            <div className="flex flex-wrap gap-3">
+
+              {dominantColors.map(
+                (color: any, index: number) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-2 rounded-lg bg-[#191923] px-3 py-2"
+                  >
+
+                    <span
+                      className="h-4 w-4 rounded-full border border-slate-600"
+                      style={{
+                        backgroundColor:
+                          color.hex ??
+                          "#64748b",
+                      }}
+                    />
+
+                    <span className="text-[10px] text-slate-300">
+                      {color.name ??
+                        color.hex ??
+                        "Color"}
+                    </span>
+
+                    <span className="text-[10px] text-slate-500">
+                      {color.percentage ?? 0}%
+                    </span>
+
+                  </div>
+                )
+              )}
+
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* =====================================================
+          TOP IMPROVEMENTS
+      ====================================================== */}
+
+      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+        <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
+          Top Improvements
+        </h3>
+
+        <div className="mt-4 space-y-3">
+
+          {improvements.map(
+            (
+              improvement: {
+                title: string;
+                description: string;
+                impact: string;
+              },
+              index: number
+            ) => (
+              <div
+                key={index}
+                className="rounded-xl bg-[#191923] p-4"
+              >
+
+                <div className="flex items-start justify-between gap-4">
+
+                  <div>
+
+                    <h4 className="text-xs font-bold text-white">
+                      {index + 1}.{" "}
+                      {improvement.title}
+                    </h4>
+
+                    <p className="mt-2 text-[11px] leading-5 text-slate-400">
+                      {improvement.description}
+                    </p>
+
+                  </div>
+
+                  <span className="whitespace-nowrap text-[10px] font-bold text-emerald-400">
+                    {improvement.impact}
+                  </span>
+
+                </div>
+
+              </div>
+            )
+          )}
+
+        </div>
+
+      </div>
+
+      {/* =====================================================
+          MODEL PIPELINE
+      ====================================================== */}
+
+      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+
+        <h3 className="text-[10px] font-bold uppercase tracking-widest text-purple-400">
+          AI Model Pipeline
+        </h3>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+
+          <PipelineCard
+            title="CatBoost"
+            value={
+              ensembleModels.catBoostProb ??
+              "N/A"
+            }
+          />
+
+          <PipelineCard
+            title="MLP Neural Network"
+            value={
+              ensembleModels.mlpNeuralNetProb ??
+              "N/A"
+            }
+          />
+
+          <PipelineCard
+            title="Meta Learner"
+            value={
+              ensembleModels.level3MetaLearnerScore ??
+              viralityScore
+            }
+          />
+
+          <PipelineCard
+            title="Fusion Layer"
+            value={
+              pipelineBreakdown.fusionLayer ??
+              "Multimodal Fusion"
+            }
+          />
+
+        </div>
+
+      </div>
+
+    </section>
+  );
+}
+
+/* =========================================================
+   METRIC CARD
+========================================================= */
+
+interface MetricCardProps {
+  title: string;
+  value: React.ReactNode;
+  label: string;
+}
+
+function MetricCard({
+  title,
+  value,
+  label,
+}: MetricCardProps) {
+  return (
+    <div className="rounded-lg bg-[#191923] p-4">
+
+      <div className="text-[9px] uppercase text-slate-500">
+        {title}
+      </div>
+
+      <div className="mt-2 text-lg font-bold text-white">
+        {value}
+      </div>
+
+      <div className="mt-1 text-[9px] text-slate-500">
+        {label}
+      </div>
+
+    </div>
+  );
+}
+
+/* =========================================================
+   PIPELINE CARD
+========================================================= */
+
+interface PipelineCardProps {
+  title: string;
+  value: React.ReactNode;
+}
+
+function PipelineCard({
+  title,
+  value,
+}: PipelineCardProps) {
+  return (
+    <div className="rounded-lg bg-[#191923] p-4">
+
+      <div className="text-[9px] uppercase text-slate-500">
+        {title}
+      </div>
+
+      <div className="mt-2 break-words text-sm font-bold text-purple-300">
+        {value}
+      </div>
 
     </div>
   );

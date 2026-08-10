@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Sparkles, Mail, Lock, User as UserIcon, AlertCircle, LogIn, UserPlus, CheckCircle2, Zap, BarChart3, ShieldCheck, Flame } from "lucide-react";
-import { signUpUser, signInUser, signInWithGoogle } from "../lib/firebase";
+import { Sparkles, Mail, Lock, User as UserIcon, AlertCircle, LogIn, UserPlus, CheckCircle2, Zap, BarChart3, ShieldCheck, Flame, UserCheck } from "lucide-react";
+import { signUpUser, signInUser, signInWithGoogle, signInGuest } from "../lib/firebase";
 
 export default function AuthGate() {
   const [mode, setMode] = useState<"signup" | "login">("signup");
@@ -30,7 +30,7 @@ export default function AuthGate() {
     try {
       if (mode === "signup") {
         await signUpUser(email, password, displayName);
-        setSuccess("Account created! Redirecting to dashboard...");
+        setSuccess("Account created! Redirecting to workspace...");
       } else {
         await signInUser(email, password);
         setSuccess("Signed in successfully! Redirecting...");
@@ -39,9 +39,9 @@ export default function AuthGate() {
       console.error("Auth error:", err);
       let message = err.message || "An authentication error occurred.";
       if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
-        message = "Invalid email or password credentials.";
+        message = "Account not found or password incorrect. You can create a new account below or continue as Guest.";
       } else if (err.code === "auth/email-already-in-use") {
-        message = "An account with this email already exists. Try signing in.";
+        message = "An account with this email already exists. Switch to Sign In below?";
       } else if (err.code === "auth/popup-closed-by-user") {
         message = "Sign-in popup was closed before completing.";
       }
@@ -67,6 +67,21 @@ export default function AuthGate() {
         console.error("Google sign in error:", err);
         setError(err?.message || "Google Sign-In failed.");
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGuestSignIn = async () => {
+    setError(null);
+    setSuccess(null);
+    setLoading(true);
+    try {
+      await signInGuest();
+      setSuccess("Entering platform as Guest Creator...");
+    } catch (err: any) {
+      console.error("Guest sign-in error:", err);
+      setError("Guest sign-in failed. Please try email sign up.");
     } finally {
       setLoading(false);
     }
@@ -193,10 +208,36 @@ export default function AuthGate() {
 
           {/* Feedback Messages */}
           {error && (
-            <div className="p-3 rounded-lg bg-red-950/60 border border-red-800/80 text-red-200 text-xs space-y-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-400" />
-                <span className="leading-relaxed">{error}</span>
+            <div className="p-3.5 rounded-lg bg-red-950/60 border border-red-800/80 text-red-200 text-xs space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-400" />
+                  <span className="leading-relaxed">{error}</span>
+                </div>
+                {error.includes("already exists") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("login");
+                      setError(null);
+                    }}
+                    className="px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold text-[11px] shadow-sm transition shrink-0 font-sans"
+                  >
+                    Sign In Now
+                  </button>
+                )}
+                {(error.includes("Account not found") || error.includes("incorrect")) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode("signup");
+                      setError(null);
+                    }}
+                    className="px-3 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold text-[11px] shadow-sm transition shrink-0 font-sans"
+                  >
+                    Create Account
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -234,6 +275,17 @@ export default function AuthGate() {
               />
             </svg>
             <span>Continue with Google</span>
+          </button>
+
+          {/* Guest Creator Button */}
+          <button
+            type="button"
+            onClick={handleGuestSignIn}
+            disabled={loading}
+            className="w-full py-2.5 px-4 rounded-lg bg-zinc-950 hover:bg-zinc-900 text-zinc-300 hover:text-zinc-100 font-medium text-xs border border-zinc-800/90 transition flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <UserCheck className="w-4 h-4 text-purple-400" />
+            <span>Continue as Guest Creator (Instant Demo)</span>
           </button>
 
           <div className="relative flex items-center justify-center my-1">

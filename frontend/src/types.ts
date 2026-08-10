@@ -4,23 +4,54 @@
 
 export interface PredictionFormState {
   caption: string;
+
   post_hour: number;
   day_of_week: number;
+
   follower_count: number;
   early_likes: number;
   early_comments: number;
   early_shares: number;
+
   saves: number;
   reach: number;
   impressions: number;
+
   media_type: string;
   content_category: string;
   platform: string;
   model: string;
+
   keywords: string;
   hashtags: string;
+
   image: File | null;
 }
+
+export const DEFAULT_INPUT: PredictionFormState = {
+  caption: "",
+  post_hour: 18,
+  day_of_week: 1,
+
+  follower_count: 0,
+  early_likes: 0,
+  early_comments: 0,
+  early_shares: 0,
+
+  saves: 0,
+  reach: 0,
+  impressions: 0,
+
+  media_type: "image",
+  content_category: "Lifestyle",
+  platform: "Instagram",
+  model: "ensemble",
+
+  keywords: "",
+  hashtags: "",
+
+  image: null,
+};
 
 // =============================
 // Backend Prediction
@@ -205,7 +236,7 @@ export interface PredictApiResponse {
 
   prediction: BackendPrediction;
 
-  recommendation_report: RecommendationData;
+  recommendation_report?: RecommendationData;
 
   recommendations?: string[];
 
@@ -232,4 +263,124 @@ export interface HistoryEntry {
   timestamp: string;
 
   predictedReach: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date | string;
+}
+
+export interface FeatureItem {
+  icon?: any;
+  iconName?: string;
+  glowColor?: string;
+  title: string;
+  description: string;
+}
+
+export interface FAQItem {
+  question: string;
+  answer: string;
+}
+
+export interface PricingTier {
+  name: string;
+  price: string;
+  period?: string;
+  description: string;
+  features: string[];
+  popular?: boolean;
+  buttonText?: string;
+  cta?: string;
+}
+
+export interface Testimonial {
+  quote: string;
+  author?: string;
+  name?: string;
+  role: string;
+  company: string;
+  avatar: string;
+  rating?: number;
+}
+
+export interface ModelMetric {
+  name: string;
+  accuracy: number;
+  f1Score: number;
+  precision: number;
+  recall: number;
+  latencyMs?: number;
+  aucRoc?: number;
+}
+
+export interface FeatureExtractionTableItem {
+  modality: string;
+  extractedFeature: string;
+  description: string;
+  algorithmTool: string;
+}
+
+export interface SoftwareDetailItem {
+  category?: string;
+  tool?: string;
+  purpose?: string;
+  component?: string;
+  techStack?: string;
+}
+
+export interface ShapFeature {
+  feature?: string;
+  featureName?: string;
+  modality?: string;
+  shapValue: number;
+  category?: string;
+  description?: string;
+}
+
+export interface ConfusionMatrixData {
+  truePositive?: number;
+  falsePositive?: number;
+  falseNegative?: number;
+  trueNegative?: number;
+  actualViralPredictedViral?: number;
+  actualViralPredictedNonViral?: number;
+  actualNonViralPredictedViral?: number;
+  actualNonViralPredictedNonViral?: number;
+}
+
+export interface RocCurvePoint {
+  fpr: number;
+  tpr: number;
+  baseline?: number;
+}
+
+export interface CorrelationItem {
+  feature1?: string;
+  feature2?: string;
+  featureA?: string;
+  featureB?: string;
+  correlation?: number;
+  value?: number;
+}
+
+export interface PastPredictionHistoryItem {
+  id: string;
+  caption?: string;
+  captionSnippet?: string;
+  platform: string;
+  score?: number;
+  viralityScore?: number;
+  confidence?: number;
+  date?: string;
+  timestamp?: string;
+  imageUrl?: string;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  followers?: number;
+  postingTime?: string;
+  performanceCategory?: string;
 }

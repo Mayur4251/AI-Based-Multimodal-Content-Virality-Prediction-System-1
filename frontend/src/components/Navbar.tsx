@@ -55,7 +55,7 @@ export default function Navbar({
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-200 border-b ${
+      className={`fixed top-0 left-0 right-0 w-full z-9999 transition-all duration-200 border-b ${
         scrolled
           ? "bg-[#0A0D14]/90 backdrop-blur-md border-white/10 shadow-lg"
           : "bg-[#0A0D14]/70 backdrop-blur-sm border-white/5"
@@ -102,6 +102,11 @@ export default function Navbar({
 
         {/* Right Actions */}
         <div className="flex items-center gap-2 shrink-0">
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono font-medium text-emerald-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>REAL-TIME LIVE</span>
+          </div>
+
           {/* AI Consultant Trigger */}
           <button
             onClick={onOpenChat}
@@ -121,7 +126,7 @@ export default function Navbar({
                 <div className="w-5 h-5 rounded-full bg-zinc-700 flex items-center justify-center text-[10px] font-bold text-zinc-100 uppercase">
                   {currentUser.displayName ? currentUser.displayName[0] : currentUser.email ? currentUser.email[0] : "U"}
                 </div>
-                <span className="hidden sm:inline font-medium max-w-[100px] truncate">
+                <span className="hidden sm:inline font-medium max-w-25 truncate">
                   {currentUser.displayName || currentUser.email?.split("@")[0]}
                 </span>
               </button>
