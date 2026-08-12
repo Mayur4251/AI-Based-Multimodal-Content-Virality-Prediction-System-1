@@ -1,102 +1,102 @@
 [
   {
     "feature": "sent_compound",
-    "mean_abs_shap": 0.29978
+    "mean_abs_shap": 0.28026
   },
   {
     "feature": "content_category_Comedy",
-    "mean_abs_shap": 0.18917
+    "mean_abs_shap": 0.2024
   },
   {
     "feature": "post_hour",
-    "mean_abs_shap": 0.18565
-  },
-  {
-    "feature": "content_category_Beauty",
-    "mean_abs_shap": 0.10227
-  },
-  {
-    "feature": "sent_pos",
-    "mean_abs_shap": 0.06813
+    "mean_abs_shap": 0.1596
   },
   {
     "feature": "follower_count",
-    "mean_abs_shap": 0.05424
+    "mean_abs_shap": 0.15411
   },
   {
-    "feature": "sent_neg",
-    "mean_abs_shap": 0.04959
+    "feature": "img_colorfulness",
+    "mean_abs_shap": 0.09024
+  },
+  {
+    "feature": "sent_pos",
+    "mean_abs_shap": 0.07553
   },
   {
     "feature": "content_category_Technology",
-    "mean_abs_shap": 0.04915
-  },
-  {
-    "feature": "content_category_Food",
-    "mean_abs_shap": 0.0475
-  },
-  {
-    "feature": "boy",
-    "mean_abs_shap": 0.04412
+    "mean_abs_shap": 0.07444
   },
   {
     "feature": "content_category_Photography",
-    "mean_abs_shap": 0.04145
+    "mean_abs_shap": 0.0739
   },
   {
-    "feature": "content_category_Travel",
-    "mean_abs_shap": 0.04042
+    "feature": "content_category_Food",
+    "mean_abs_shap": 0.07326
   },
   {
-    "feature": "dog",
-    "mean_abs_shap": 0.0387
+    "feature": "img_brightness_mean",
+    "mean_abs_shap": 0.06684
   },
   {
-    "feature": "content_category_Music",
-    "mean_abs_shap": 0.03406
-  },
-  {
-    "feature": "hook_score",
-    "mean_abs_shap": 0.02702
-  },
-  {
-    "feature": "content_category_Fashion",
-    "mean_abs_shap": 0.02595
-  },
-  {
-    "feature": "day_of_week",
-    "mean_abs_shap": 0.02242
+    "feature": "img_edge_density",
+    "mean_abs_shap": 0.06238
   },
   {
     "feature": "caption_len",
-    "mean_abs_shap": 0.02064
+    "mean_abs_shap": 0.06173
   },
   {
-    "feature": "red",
-    "mean_abs_shap": 0.0205
+    "feature": "content_category_Music",
+    "mean_abs_shap": 0.06042
   },
   {
-    "feature": "girl",
-    "mean_abs_shap": 0.01989
+    "feature": "img_saturation_mean",
+    "mean_abs_shap": 0.05579
   },
   {
-    "feature": "group",
-    "mean_abs_shap": 0.01988
+    "feature": "img_brightness_std",
+    "mean_abs_shap": 0.05382
   },
   {
-    "feature": "people",
-    "mean_abs_shap": 0.01895
-  },
-  {
-    "feature": "sits",
-    "mean_abs_shap": 0.01575
-  },
-  {
-    "feature": "field",
-    "mean_abs_shap": 0.01558
+    "feature": "img_warm_ratio",
+    "mean_abs_shap": 0.05003
   },
   {
     "feature": "caption_word_count",
-    "mean_abs_shap": 0.01489
+    "mean_abs_shap": 0.04979
+  },
+  {
+    "feature": "day_of_week",
+    "mean_abs_shap": 0.04903
+  },
+  {
+    "feature": "content_category_Travel",
+    "mean_abs_shap": 0.04757
+  },
+  {
+    "feature": "sent_neg",
+    "mean_abs_shap": 0.03789
+  },
+  {
+    "feature": "hook_score",
+    "mean_abs_shap": 0.03699
+  },
+  {
+    "feature": "man",
+    "mean_abs_shap": 0.03648
+  },
+  {
+    "feature": "content_category_Beauty",
+    "mean_abs_shap": 0.0355
+  },
+  {
+    "feature": "img_saturation_std",
+    "mean_abs_shap": 0.03494
+  },
+  {
+    "feature": "red",
+    "mean_abs_shap": 0.03104
   }
 ]

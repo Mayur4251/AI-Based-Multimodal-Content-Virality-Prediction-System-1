@@ -7,7 +7,25 @@
     "caption_len",
     "caption_word_count",
     "hook_score",
-    "hashtag_count"
+    "hashtag_count",
+    "img_brightness_mean",
+    "img_brightness_std",
+    "img_saturation_mean",
+    "img_saturation_std",
+    "img_colorfulness",
+    "img_edge_density",
+    "img_warm_ratio",
+    "img_aspect_ratio"
+  ],
+  "image_feature_columns": [
+    "img_brightness_mean",
+    "img_brightness_std",
+    "img_saturation_mean",
+    "img_saturation_std",
+    "img_colorfulness",
+    "img_edge_density",
+    "img_warm_ratio",
+    "img_aspect_ratio"
   ],
   "sentiment_columns": [
     "sent_neg",
@@ -33,8 +51,10 @@
   ],
   "id_columns_not_used_as_features": [
     "post_id",
-    "source_image_name",
+    "image_id",
+    "image_name",
     "image_path"
   ],
-  "note": "early_likes/early_shares/early_comments/saves/reach/impressions are POST-PUBLISH outcomes and are never used as features, at train time or inference time."
+  "split_strategy": "GroupShuffleSplit on image_id (test_size=0.2) -- prevents the same image appearing in both train and test across its multiple captions.",
+  "note": "early_likes/early_shares/early_comments/saves/reach/impressions are POST-PUBLISH outcomes and are never used as features, at train time or inference time. Image features are handcrafted (see image_features.py), computed identically at train and inference time."
 }

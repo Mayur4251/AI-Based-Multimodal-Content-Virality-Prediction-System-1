@@ -11,26 +11,30 @@ Usage:
         "media_type": "reel",
         "content_category": "Lifestyle",
         "hashtags": "#dogsofinstagram #puppy",
+        "imageBase64": "data:image/jpeg;base64,...",  # optional
     })
     # -> {"viral": 1, "viral_probability": 0.83, "model": "ensemble"}
 
-WHAT CHANGED
-------------
+WHAT CHANGED (v2)
+-------------------
+imageBase64 is now decoded and turned into the same handcrafted image
+features (img_brightness_mean, img_colorfulness, etc. -- see
+image_features.py) that train_pipeline.py computes from disk images via
+relabel_dataset.py. These MUST match exactly or the feature vector won't
+align with what the scaler expects -- both call
+image_features.extract_image_features()/extract_from_base64()/
+extract_from_path() from the same module, never separately reimplemented.
+
+If no image is supplied, extract_from_base64("") returns neutral default
+values (see DEFAULT_FEATURES in image_features.py) rather than zeros, so a
+caption-only prediction doesn't get an artificial penalty/boost from a
+missing image.
+
+WHAT CHANGED (v1, unchanged from before)
+-------------------------------------------
 early_likes / early_shares / early_comments / saves / reach / impressions
-are REMOVED from the feature row. Those are post-publish outcomes -- the
-model was retrained (see train_pipeline.py) without them, so feeding them
-in here would either be ignored (if the scaler/encoder no longer expect
-them, this would crash) or -- if left in by mistake -- reintroduce the
-exact leakage that made predictions generic in the first place. Never add
-them back to this function.
-
-hook_score and hashtag_count are added to mirror the engineered features
-train_pipeline.py computes at train time. These MUST be computed exactly
-the same way here as during training, or the feature vector won't match
-what the scaler/model expect.
-
-All artifacts (models/vectorizer/scaler/encoder) are loaded once at import
-time from the same directory as this file.
+are REMOVED from the feature row -- those are post-publish outcomes, never
+fed to the model at train or inference time.
 """
 
 import json
@@ -50,6 +54,8 @@ except ImportError:  # pragma: no cover
         class SentimentIntensityAnalyzer:  # type: ignore
             def polarity_scores(self, text: str) -> dict:
                 return {"neg": 0.0, "neu": 1.0, "pos": 0.0, "compound": 0.0}
+
+from image_features import extract_from_base64
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -73,9 +79,13 @@ with open(CONFIG_DIR / "schema.json", "r", encoding="utf-8") as f:
 
 _sia = SentimentIntensityAnalyzer()
 
-# includes caption_len / caption_word_count / hook_score / hashtag_count
+# includes caption_len / caption_word_count / hook_score / hashtag_count /
+# img_brightness_mean / img_colorfulness / etc. -- whatever train_pipeline.py
+# actually put in meta_numeric, read straight from schema.json so this file
+# never has its own hardcoded copy that could drift out of sync.
 _META_NUMERIC = _SCHEMA["metadata_numeric_columns"]
 _CAT_COLS = _SCHEMA["categorical_columns"]
+_IMG_COLS = _SCHEMA.get("image_feature_columns", [])
 
 _MODELS = {"random_forest": _rf, "svm": _svm, "xgboost": _xgb, "ensemble": _ensemble}
 
@@ -105,7 +115,8 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
 
     post is expected to carry ONLY pre-publish fields:
     caption, post_hour, day_of_week, follower_count, media_type,
-    content_category, hashtags (optional), keywords (optional).
+    content_category, hashtags (optional), keywords (optional),
+    imageBase64 (optional).
     """
     caption = str(post.get("caption", "")).strip()
 
@@ -113,6 +124,8 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
 
     sentiment = _sia.polarity_scores(caption)
     sent_row = {f"sent_{k}": v for k, v in sentiment.items()}
+
+    image_features = extract_from_base64(post.get("imageBase64", ""))
 
     meta_row = {
         "post_hour": post.get("post_hour", 0),
@@ -123,6 +136,7 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
         "hook_score": _hook_score(caption),
         "hashtag_count": _hashtag_count(caption, post.get("hashtags", "")),
     }
+    meta_row.update({k: image_features[k] for k in _IMG_COLS})
     meta_row.update(sent_row)
     meta_df = pd.DataFrame([meta_row])[_META_NUMERIC + list(sent_row.keys())]
     meta_scaled = _scaler.transform(meta_df)
@@ -139,9 +153,10 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
 def predict_virality(post: dict, model: str = "ensemble") -> dict:
     """
     post: dict with keys caption, post_hour, day_of_week, follower_count,
-          media_type, content_category, hashtags (optional). Do NOT pass
-          early_likes/early_shares/early_comments/saves/reach/impressions --
-          the model was trained without them and does not expect them.
+          media_type, content_category, hashtags (optional),
+          imageBase64 (optional). Do NOT pass early_likes/early_shares/
+          early_comments/saves/reach/impressions -- the model was trained
+          without them and does not expect them.
     model: one of "random_forest", "svm", "xgboost", "ensemble" (default)
     """
     if model not in _MODELS:

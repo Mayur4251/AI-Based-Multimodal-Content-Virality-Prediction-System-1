@@ -152,12 +152,6 @@ export default function PredictionForm({
         post_hour: 18,
         day_of_week: 1,
         follower_count: 5000,
-        early_likes: 0,
-        early_comments: 0,
-        early_shares: 0,
-        saves: 0,
-        reach: 0,
-        impressions: 0,
         media_type: "image",
         content_category: "Lifestyle",
         platform: "Instagram",
@@ -178,8 +172,6 @@ export default function PredictionForm({
       keywords: preset.keywords,
       hashtags: preset.hashtags,
       follower_count: preset.followers,
-      early_likes: preset.likes,
-      early_comments: preset.comments,
       post_hour: preset.post_hour,
       day_of_week: preset.day_of_week,
     }));
@@ -560,11 +552,11 @@ export default function PredictionForm({
           />
         </div>
 
-        {/* 7. Account Followers & Early Velocity Signals (Always Visible - Defaults to 0 cleanly) */}
+        {/* 7. Account Followers (pre-publish signal only) */}
         <div className="pt-4 border-t border-zinc-800 space-y-3">
           <label className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
             <Users className="w-4 h-4 text-purple-400" />
-            Account Followers & Early Velocity Signals
+            Account Followers
           </label>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -580,57 +572,6 @@ export default function PredictionForm({
                 onChange={(e) => {
                   const val = e.target.value;
                   updateField("follower_count", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
-                }}
-                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                1st-Hour Likes
-              </label>
-              <input
-                type="number"
-                min={0}
-                placeholder="0"
-                value={predictionInput.early_likes === 0 ? "" : predictionInput.early_likes}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  updateField("early_likes", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
-                }}
-                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                1st-Hour Comments
-              </label>
-              <input
-                type="number"
-                min={0}
-                placeholder="0"
-                value={predictionInput.early_comments === 0 ? "" : predictionInput.early_comments}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  updateField("early_comments", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
-                }}
-                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                1st-Hour Shares
-              </label>
-              <input
-                type="number"
-                min={0}
-                placeholder="0"
-                value={predictionInput.early_shares === 0 ? "" : predictionInput.early_shares}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  updateField("early_shares", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
                 }}
                 className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
               />

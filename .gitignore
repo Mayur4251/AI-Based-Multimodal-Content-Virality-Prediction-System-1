@@ -1,23 +1,22 @@
 # Python
-venv/
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Environment files
 .env
+.env.local
 
 # Node
 node_modules/
+
+# Build outputs
 dist/
 build/
 
-# VS Code
+# VS Code local settings
 .vscode/
 
-# Zip files
-*.zip
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
+# Flickr8k training images
+backend/datasets/Flickr8k/Image/

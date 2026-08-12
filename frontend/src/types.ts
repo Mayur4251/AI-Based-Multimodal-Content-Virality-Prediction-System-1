@@ -9,13 +9,6 @@ export interface PredictionFormState {
   day_of_week: number;
 
   follower_count: number;
-  early_likes: number;
-  early_comments: number;
-  early_shares: number;
-
-  saves: number;
-  reach: number;
-  impressions: number;
 
   media_type: string;
   content_category: string;
@@ -28,19 +21,13 @@ export interface PredictionFormState {
   image: File | null;
 }
 
+
 export const DEFAULT_INPUT: PredictionFormState = {
   caption: "",
   post_hour: 18,
   day_of_week: 1,
 
   follower_count: 0,
-  early_likes: 0,
-  early_comments: 0,
-  early_shares: 0,
-
-  saves: 0,
-  reach: 0,
-  impressions: 0,
 
   media_type: "image",
   content_category: "Lifestyle",

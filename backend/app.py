@@ -45,11 +45,13 @@ app.add_middleware(
 # IMPORTANT: This request schema intentionally does NOT include
 # early_likes / early_shares / early_comments / saves / reach / impressions.
 # Those are post-publish outcomes -- a real user predicting virality BEFORE
-# posting never has them. The old schema asked for them anyway, which meant
-# the "prediction" was really just echoing back whatever numbers the user
-# typed into those fields, not reacting to the caption. train_pipeline.py
-# was updated to match: the model is trained without those columns, so
-# inference.py must not expect them either.
+# posting never has them.
+#
+# imageBase64 IS used now (v2) -- it's decoded in inference.py into
+# handcrafted visual features (see image_features.py) that the model was
+# retrained on. Previously this field was accepted here but never actually
+# forwarded to predict_virality(), so uploaded images had zero effect on
+# the prediction. That's fixed below.
 
 class PredictionRequest(BaseModel):
     caption: str
@@ -65,7 +67,7 @@ class PredictionRequest(BaseModel):
     keywords: str = ""
     hashtags: str = ""
 
-    # Optional image information
+    # Image -- now actually used, see note above
     imageBase64: str = ""
     imageMimeType: str = ""
 
@@ -102,6 +104,10 @@ def predict(data: PredictionRequest):
             # Text enrichment
             "keywords": data.keywords,
             "hashtags": data.hashtags,
+
+            # Image -- FIX: this was previously missing from post_payload,
+            # so predict_virality() never saw the uploaded image at all.
+            "imageBase64": data.imageBase64,
         }
 
         result = predict_virality(
