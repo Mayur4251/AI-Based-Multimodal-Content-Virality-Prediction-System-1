@@ -1,102 +1,102 @@
 [
   {
-    "feature": "early_likes",
-    "mean_abs_shap": 0.05394
+    "feature": "sent_compound",
+    "mean_abs_shap": 0.29978
   },
   {
-    "feature": "impressions",
-    "mean_abs_shap": 0.04068
+    "feature": "content_category_Comedy",
+    "mean_abs_shap": 0.18917
   },
   {
-    "feature": "saves",
-    "mean_abs_shap": 0.02848
+    "feature": "post_hour",
+    "mean_abs_shap": 0.18565
   },
   {
-    "feature": "early_shares",
-    "mean_abs_shap": 0.02174
+    "feature": "content_category_Beauty",
+    "mean_abs_shap": 0.10227
   },
   {
-    "feature": "dog jumping",
-    "mean_abs_shap": 0.02089
+    "feature": "sent_pos",
+    "mean_abs_shap": 0.06813
   },
   {
-    "feature": "dog runs",
-    "mean_abs_shap": 0.02002
+    "feature": "follower_count",
+    "mean_abs_shap": 0.05424
   },
   {
-    "feature": "reach",
-    "mean_abs_shap": 0.01496
+    "feature": "sent_neg",
+    "mean_abs_shap": 0.04959
   },
   {
-    "feature": "brown dogs",
-    "mean_abs_shap": 0.01059
+    "feature": "content_category_Technology",
+    "mean_abs_shap": 0.04915
   },
   {
-    "feature": "soccer ball",
-    "mean_abs_shap": 0.0097
+    "feature": "content_category_Food",
+    "mean_abs_shap": 0.0475
   },
   {
-    "feature": "uniform",
-    "mean_abs_shap": 0.00951
+    "feature": "boy",
+    "mean_abs_shap": 0.04412
   },
   {
-    "feature": "chases",
-    "mean_abs_shap": 0.00922
+    "feature": "content_category_Photography",
+    "mean_abs_shap": 0.04145
   },
   {
-    "feature": "girl wearing",
-    "mean_abs_shap": 0.00883
+    "feature": "content_category_Travel",
+    "mean_abs_shap": 0.04042
   },
   {
-    "feature": "covered",
-    "mean_abs_shap": 0.00881
+    "feature": "dog",
+    "mean_abs_shap": 0.0387
   },
   {
-    "feature": "stick mouth",
-    "mean_abs_shap": 0.00855
+    "feature": "content_category_Music",
+    "mean_abs_shap": 0.03406
   },
   {
-    "feature": "orange",
-    "mean_abs_shap": 0.00851
+    "feature": "hook_score",
+    "mean_abs_shap": 0.02702
   },
   {
-    "feature": "walks",
-    "mean_abs_shap": 0.00835
+    "feature": "content_category_Fashion",
+    "mean_abs_shap": 0.02595
   },
   {
-    "feature": "sidewalk",
-    "mean_abs_shap": 0.00799
+    "feature": "day_of_week",
+    "mean_abs_shap": 0.02242
   },
   {
-    "feature": "pool",
-    "mean_abs_shap": 0.00794
+    "feature": "caption_len",
+    "mean_abs_shap": 0.02064
   },
   {
-    "feature": "climbing",
-    "mean_abs_shap": 0.00718
+    "feature": "red",
+    "mean_abs_shap": 0.0205
   },
   {
-    "feature": "racing",
-    "mean_abs_shap": 0.00696
+    "feature": "girl",
+    "mean_abs_shap": 0.01989
   },
   {
-    "feature": "white shirt",
-    "mean_abs_shap": 0.00691
+    "feature": "group",
+    "mean_abs_shap": 0.01988
   },
   {
-    "feature": "large",
-    "mean_abs_shap": 0.00658
+    "feature": "people",
+    "mean_abs_shap": 0.01895
   },
   {
-    "feature": "boat",
-    "mean_abs_shap": 0.00658
+    "feature": "sits",
+    "mean_abs_shap": 0.01575
   },
   {
-    "feature": "early_comments",
-    "mean_abs_shap": 0.00651
+    "feature": "field",
+    "mean_abs_shap": 0.01558
   },
   {
-    "feature": "stand",
-    "mean_abs_shap": 0.00651
+    "feature": "caption_word_count",
+    "mean_abs_shap": 0.01489
   }
 ]

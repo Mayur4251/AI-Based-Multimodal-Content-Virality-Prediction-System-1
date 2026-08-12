@@ -276,73 +276,496 @@ export const subscribeAuth = (callback: (user: User | null) => void) => {
 };
 
 // Firestore Helpers
-export const savePredictionToCloud = async (userId: string | null, predictionData: any) => {
+//
+// IMPORTANT:
+// Predictions are persisted in Firestore and also kept in a small local
+// backup. The local backup is used only as a safety net when Firestore
+// temporarily fails or when an older browser session still has data that
+// has not reached Firestore yet.
+//
+// This prevents the dashboard from going from 29 -> 28 after a refresh.
+
+const PREDICTION_COLLECTION = "predictions";
+const LOCAL_PREDICTION_BACKUP_KEY = "viralai_prediction_backup_v2";
+
+const getLocalPredictionBackup = (): any[] => {
   try {
-    let safeImageUrl = predictionData.imageUrl || "";
-    // If the image string is excessively large (> 250,000 characters), keep a placeholder fallback URL to keep Firestore document light
-    if (safeImageUrl.length > 250000) {
-      safeImageUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80";
+    const raw = localStorage.getItem(LOCAL_PREDICTION_BACKUP_KEY);
+
+    if (!raw) {
+      return [];
     }
 
-    const docRef = await addDoc(collection(db, "predictions"), {
-      userId: userId || "guest_user",
-      platform: predictionData.platform || "Instagram",
-      captionSnippet: predictionData.captionSnippet || predictionData.caption || "Multimodal Asset Payload",
-      caption: predictionData.caption || "",
-      imageUrl: safeImageUrl,
-      followers: predictionData.followers ?? 0,
-      likes: predictionData.likes ?? 0,
-      comments: predictionData.comments ?? 0,
-      postingTime: predictionData.postingTime || "12:00",
-      viralityScore: predictionData.viralityScore || 85,
-      confidence: predictionData.confidence || 90,
-      predictedReach: predictionData.predictedReach || "15K - 45K",
-      performanceCategory: predictionData.performanceCategory || "High Viral Potential",
-      topHook: predictionData.topHook || "Engaging visual focal point",
-      timestamp: predictionData.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      createdAt: serverTimestamp()
-    });
-    return docRef.id;
-  } catch (err) {
-    console.warn("Error saving prediction to Firestore:", err);
-    return null;
+    const parsed = JSON.parse(raw);
+
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn("Could not read local prediction backup:", error);
+    return [];
   }
 };
 
-export const subscribeGlobalPredictions = (callback: (predictions: any[]) => void) => {
-  const q = query(collection(db, "predictions"));
+const saveLocalPredictionBackup = (prediction: any) => {
+  try {
+    const existing = getLocalPredictionBackup();
+
+    const predictionId =
+      prediction.id ||
+      prediction.clientPredictionId ||
+      `local_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    const item = {
+      ...prediction,
+      id: predictionId,
+      clientPredictionId:
+        prediction.clientPredictionId || predictionId,
+      createdAt:
+        typeof prediction.createdAt === "number"
+          ? prediction.createdAt
+          : Date.now()
+    };
+
+    const withoutDuplicate = existing.filter(
+      (item: any) =>
+        item?.id !== predictionId &&
+        item?.clientPredictionId !== item.clientPredictionId
+    );
+
+    const updated = [item, ...withoutDuplicate].slice(0, 500);
+
+    localStorage.setItem(
+      LOCAL_PREDICTION_BACKUP_KEY,
+      JSON.stringify(updated)
+    );
+  } catch (error) {
+    console.warn("Could not save local prediction backup:", error);
+  }
+};
+
+const removeLocalPredictionBackup = (prediction: any) => {
+  try {
+    const existing = getLocalPredictionBackup();
+
+    const updated = existing.filter(
+      (item: any) =>
+        item?.id !== prediction?.id &&
+        item?.clientPredictionId !== prediction?.clientPredictionId
+    );
+
+    localStorage.setItem(
+      LOCAL_PREDICTION_BACKUP_KEY,
+      JSON.stringify(updated)
+    );
+  } catch (error) {
+    console.warn("Could not update local prediction backup:", error);
+  }
+};
+
+const toSafePredictionNumber = (value: any, fallback = 0) => {
+  const numberValue = Number(value);
+
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+const sanitizeForFirestore = (value: any): any => {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForFirestore);
+  }
+
+  if (typeof value === "object") {
+    const result: Record<string, any> = {};
+
+    Object.entries(value).forEach(([key, item]) => {
+      // Do not try to store browser-only File/Blob objects.
+      if (
+        typeof File !== "undefined" &&
+        item instanceof File
+      ) {
+        return;
+      }
+
+      if (
+        typeof Blob !== "undefined" &&
+        item instanceof Blob
+      ) {
+        return;
+      }
+
+      result[key] = sanitizeForFirestore(item);
+    });
+
+    return result;
+  }
+
+  return null;
+};
+
+export const savePredictionToCloud = async (
+  userId: string | null,
+  predictionData: any
+) => {
+  const clientPredictionId =
+    predictionData?.clientPredictionId ||
+    (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `prediction_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
+
+  let safeImageUrl = predictionData?.imageUrl || "";
+
+  // Keep Firestore document size small.
+  if (typeof safeImageUrl === "string" && safeImageUrl.length > 250000) {
+    safeImageUrl =
+      "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=400&q=80";
+  }
+
+  /*
+   * Save the important dashboard fields explicitly.
+   * Also save the complete sanitized prediction payload so fields added
+   * later by the prediction engine are not silently lost.
+   */
+  const predictionDocument = {
+    ...sanitizeForFirestore(predictionData),
+
+    userId: userId || predictionData?.userId || "guest_user",
+
+    clientPredictionId,
+
+    platform:
+      predictionData?.platform ||
+      predictionData?.targetPlatform ||
+      "Instagram",
+
+    captionSnippet:
+      predictionData?.captionSnippet ||
+      predictionData?.caption ||
+      "Multimodal Asset Payload",
+
+    caption: predictionData?.caption || "",
+
+    imageUrl: safeImageUrl,
+
+    followers: toSafePredictionNumber(
+      predictionData?.followers,
+      0
+    ),
+
+    likes: toSafePredictionNumber(
+      predictionData?.likes,
+      0
+    ),
+
+    comments: toSafePredictionNumber(
+      predictionData?.comments,
+      0
+    ),
+
+    shares: toSafePredictionNumber(
+      predictionData?.shares,
+      0
+    ),
+
+    saves: toSafePredictionNumber(
+      predictionData?.saves,
+      0
+    ),
+
+    impressions: toSafePredictionNumber(
+      predictionData?.impressions,
+      0
+    ),
+
+    postingTime:
+      predictionData?.postingTime ||
+      predictionData?.customTime ||
+      "12:00",
+
+    viralityScore: toSafePredictionNumber(
+      predictionData?.viralityScore,
+      0
+    ),
+
+    confidence: toSafePredictionNumber(
+      predictionData?.confidence,
+      0
+    ),
+
+    predictedReach:
+      predictionData?.predictedReach ??
+      predictionData?.reach ??
+      "15K - 45K",
+
+    performanceCategory:
+      predictionData?.performanceCategory ||
+      predictionData?.category ||
+      "High Viral Potential",
+
+    topHook:
+      predictionData?.topHook ||
+      predictionData?.hook ||
+      "Engaging visual focal point",
+
+    timestamp:
+      predictionData?.timestamp ||
+      new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      }),
+
+    createdAt: serverTimestamp()
+  };
+
+  console.log(
+    "🔥 Saving COMPLETE prediction to Firestore:",
+    predictionDocument
+  );
+
+  /*
+   * Use a deterministic client-generated document ID instead of addDoc().
+   * This prevents the same prediction from being accidentally inserted
+   * multiple times when the submit handler/retry runs.
+   */
+  const predictionRef = doc(
+    db,
+    PREDICTION_COLLECTION,
+    clientPredictionId
+  );
+
+  try {
+    await setDoc(predictionRef, predictionDocument, {
+      merge: true
+    });
+
+    console.log(
+      "✅ Prediction successfully saved to Firestore:",
+      clientPredictionId
+    );
+
+    /*
+     * Keep a local copy too. It is used only to protect the UI if the
+     * Firestore listener is temporarily behind/unavailable.
+     */
+    saveLocalPredictionBackup({
+      ...predictionDocument,
+      id: clientPredictionId,
+      clientPredictionId,
+      createdAt: Date.now()
+    });
+
+    return clientPredictionId;
+  } catch (error) {
+    console.error(
+      "❌ FIRESTORE SAVE FAILED:",
+      error
+    );
+
+    /*
+     * Do not lose the newly submitted prediction just because Firestore
+     * is temporarily unavailable or the current Firestore rules reject
+     * the write.
+     */
+    saveLocalPredictionBackup({
+      ...predictionDocument,
+      id: clientPredictionId,
+      clientPredictionId,
+      createdAt: Date.now()
+    });
+
+    console.warn(
+      "⚠️ Prediction kept in local backup so refresh does not lose it."
+    );
+
+    // Re-throw so App.tsx can still show its normal error handling.
+    throw error;
+  }
+};
+
+export const subscribeGlobalPredictions = (
+  callback: (predictions: any[]) => void
+) => {
+  const q = query(
+    collection(db, PREDICTION_COLLECTION)
+  );
 
   return onSnapshot(
     q,
+
     (snapshot) => {
-      const predictions: any[] = [];
-      snapshot.forEach((doc) => {
-        predictions.push({ id: doc.id, ...doc.data() });
+      const firestorePredictions: any[] = [];
+
+      snapshot.forEach((snapshotDoc) => {
+        const data = snapshotDoc.data();
+
+        firestorePredictions.push({
+          id: snapshotDoc.id,
+          ...data
+        });
       });
 
-      // Sort in memory by createdAt descending or fallback
+      /*
+       * Read the local safety copy.
+       * This is important because the old dashboard state showed 29 after
+       * submit, but refresh loaded only the 28 Firestore records.
+       */
+      const localPredictions = getLocalPredictionBackup();
+
+      /*
+       * Firestore is the primary source.
+       * Local records are added only when the same prediction does not
+       * already exist in Firestore.
+       */
+      const firestoreIds = new Set(
+        firestorePredictions.map(
+          (prediction) =>
+            prediction.id ||
+            prediction.clientPredictionId
+        )
+      );
+
+      const firestoreClientIds = new Set(
+        firestorePredictions
+          .map((prediction) => prediction.clientPredictionId)
+          .filter(Boolean)
+      );
+
+      const missingLocalPredictions =
+        localPredictions.filter((prediction) => {
+          if (
+            prediction?.id &&
+            firestoreIds.has(prediction.id)
+          ) {
+            return false;
+          }
+
+          if (
+            prediction?.clientPredictionId &&
+            firestoreClientIds.has(
+              prediction.clientPredictionId
+            )
+          ) {
+            return false;
+          }
+
+          return true;
+        });
+
+      const predictions = [
+        ...firestorePredictions,
+        ...missingLocalPredictions
+      ];
+
+      /*
+       * Sort newest first.
+       * Firestore Timestamp -> milliseconds.
+       * Local backup -> numeric createdAt.
+       */
       predictions.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis?.() || 0;
-        const timeB = b.createdAt?.toMillis?.() || 0;
-        return timeB - timeA;
+        const getTime = (prediction: any) => {
+          if (
+            typeof prediction?.createdAt === "number"
+          ) {
+            return prediction.createdAt;
+          }
+
+          if (
+            prediction?.createdAt?.toMillis
+          ) {
+            return prediction.createdAt.toMillis();
+          }
+
+          if (
+            typeof prediction?.createdAt === "string"
+          ) {
+            const parsed = Date.parse(
+              prediction.createdAt
+            );
+
+            return Number.isNaN(parsed)
+              ? 0
+              : parsed;
+          }
+
+          return 0;
+        };
+
+        return getTime(b) - getTime(a);
       });
+
+      console.log(
+        `🔥 Firestore predictions loaded: ${firestorePredictions.length}`
+      );
+
+      console.log(
+        `💾 Local prediction backup loaded: ${localPredictions.length}`
+      );
+
+      console.log(
+        `📊 Predictions available to dashboard: ${predictions.length}`
+      );
 
       callback(predictions);
     },
-    (err) => {
-      console.warn("Firestore global subscription notice:", err);
+
+    (error) => {
+      console.error(
+        "❌ Firestore subscription failed:",
+        error
+      );
+
+      /*
+       * If Firestore itself is unavailable, do not wipe the dashboard.
+       * Use the last locally persisted predictions instead.
+       */
+      const localPredictions =
+        getLocalPredictionBackup();
+
+      console.warn(
+        `⚠️ Using ${localPredictions.length} locally backed-up predictions.`
+      );
+
+      callback(localPredictions);
     }
   );
 };
 
-export const subscribeUserPredictions = (userId: string, callback: (predictions: any[]) => void) => {
+export const subscribeUserPredictions = (
+  userId: string,
+  callback: (predictions: any[]) => void
+) => {
   if (!userId) {
     callback([]);
     return () => {};
   }
 
   return subscribeGlobalPredictions((all) => {
-    const userOnly = all.filter((p) => p.userId === userId);
+    const userOnly = all.filter(
+      (prediction) =>
+        prediction.userId === userId
+    );
+
     callback(userOnly);
   });
 };

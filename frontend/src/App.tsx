@@ -14,6 +14,7 @@ import {
   db,
   logOutUser,
   subscribeGlobalPredictions,
+  savePredictionToCloud,
 } from "./lib/firebase";
 
 import type {
@@ -45,14 +46,17 @@ const DEFAULT_INPUT: PredictionFormState = {
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
+  const [activeTab, setActiveTab] =
+    useState<NavTab>("dashboard");
 
   const [currentUser, setCurrentUser] =
     useState<FirebaseUser | null>(null);
 
-  const [guestAccess, setGuestAccess] = useState(false);
+  const [guestAccess, setGuestAccess] =
+    useState(false);
 
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] =
+    useState(false);
 
   const [authModalMode, setAuthModalMode] =
     useState<"login" | "signup">("login");
@@ -70,18 +74,23 @@ function App() {
   const [predictionHistory, setPredictionHistory] =
     useState<HistoryEntry[]>([]);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncing, setIsSyncing] =
+    useState(false);
 
   /*
    * Real-time prediction toggle.
    */
-  const [realtimeSync, setRealtimeSync] = useState(false);
+  const [realtimeSync, setRealtimeSync] =
+    useState(false);
 
-  const [error, setError] = useState("");
+  const [error, setError] =
+    useState("");
 
-  const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const [hasAnalyzed, setHasAnalyzed] =
+    useState(false);
 
   // ============================================================
   // TEST FIRESTORE CONNECTION
@@ -126,37 +135,26 @@ function App() {
   // ============================================================
   // GLOBAL REAL-TIME FIRESTORE PREDICTIONS
   // ============================================================
-  //
-  // Whenever Firestore changes:
-  //
-  // Firebase
-  //    ↓
-  // predictionHistory
-  //    ↓
-  // DashboardView
-  //    ↓
-  // AnalyticsView
-  //
-  // This keeps the whole website synchronized.
-  // ============================================================
 
   useEffect(() => {
-    const unsubscribe = subscribeGlobalPredictions(
-      (docs) => {
-        if (Array.isArray(docs)) {
+    const unsubscribe =
+      subscribeGlobalPredictions(
+        (docs) => {
           /*
-           * IMPORTANT:
-           * Do not check docs.length > 0 here.
-           *
-           * If Firestore becomes empty, the UI should also
-           * become empty instead of keeping old/stale numbers.
+           * FIRESTORE IS THE SINGLE SOURCE OF TRUTH.
+           * Dashboard and Analytics are always rebuilt from
+           * persisted Firestore documents.
            */
-          setPredictionHistory(docs);
-        } else {
-          setPredictionHistory([]);
+          if (Array.isArray(docs)) {
+            console.log(
+              `\ud83d\udd25 Firestore predictions loaded: ${docs.length}`
+            );
+            setPredictionHistory(docs);
+          } else {
+            setPredictionHistory([]);
+          }
         }
-      }
-    );
+      );
 
     return () => unsubscribe();
   }, []);
@@ -192,8 +190,8 @@ function App() {
     const hasHashtags = Boolean(
       (targetInput.keywords &&
         targetInput.keywords.trim().length > 0) ||
-      (targetInput.hashtags &&
-        targetInput.hashtags.trim().length > 0)
+        (targetInput.hashtags &&
+          targetInput.hashtags.trim().length > 0)
     );
 
     const missingFields: string[] = [];
@@ -244,12 +242,16 @@ function App() {
             const reader = new FileReader();
 
             reader.onload = () => {
-              resolve(reader.result as string);
+              resolve(
+                reader.result as string
+              );
             };
 
             reader.onerror = () => {
               reject(
-                new Error("Failed to read image")
+                new Error(
+                  "Failed to read image"
+                )
               );
             };
 
@@ -259,7 +261,8 @@ function App() {
           }
         );
 
-        imageMimeType = targetInput.image.type;
+        imageMimeType =
+          targetInput.image.type;
       }
 
       // ========================================================
@@ -270,23 +273,39 @@ function App() {
         caption: targetInput.caption,
         post_hour: targetInput.post_hour,
         day_of_week: targetInput.day_of_week,
-        follower_count: targetInput.follower_count,
+        follower_count:
+          targetInput.follower_count,
 
-        early_likes: targetInput.early_likes,
-        early_comments: targetInput.early_comments,
-        early_shares: targetInput.early_shares,
+        early_likes:
+          targetInput.early_likes,
+
+        early_comments:
+          targetInput.early_comments,
+
+        early_shares:
+          targetInput.early_shares,
 
         saves: targetInput.saves,
         reach: targetInput.reach,
         impressions: targetInput.impressions,
 
-        media_type: targetInput.media_type,
-        content_category: targetInput.content_category,
-        platform: targetInput.platform,
-        model: targetInput.model,
+        media_type:
+          targetInput.media_type,
 
-        keywords: targetInput.keywords,
-        hashtags: targetInput.hashtags,
+        content_category:
+          targetInput.content_category,
+
+        platform:
+          targetInput.platform,
+
+        model:
+          targetInput.model,
+
+        keywords:
+          targetInput.keywords,
+
+        hashtags:
+          targetInput.hashtags,
 
         imageBase64,
         imageMimeType,
@@ -301,13 +320,30 @@ function App() {
       // BACKEND REQUEST
       // ========================================================
 
+      /*
+       * IMPORTANT:
+       *
+       * Frontend calls:
+       *
+       * /api/predict
+       *
+       * The request is handled by server.ts.
+       *
+       * server.ts then communicates with FastAPI.
+       *
+       * Therefore we keep this as:
+       *
+       * ${API_BASE_URL}/api/predict
+       */
+
       const response = await fetch(
         `${API_BASE_URL}/api/predict`,
         {
           method: "POST",
 
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
 
           body: JSON.stringify(payload),
@@ -315,7 +351,8 @@ function App() {
       );
 
       if (!response.ok) {
-        const text = await response.text();
+        const text =
+          await response.text();
 
         throw new Error(
           `Server Error (${response.status}): ${text.slice(
@@ -337,7 +374,10 @@ function App() {
         data
       );
 
-      // Backend explicitly reported failure
+      // ========================================================
+      // BACKEND FAILURE
+      // ========================================================
+
       if (data.success === false) {
         throw new Error(
           data.message ||
@@ -345,45 +385,187 @@ function App() {
         );
       }
 
-      // Backend may return:
-      //
-      // {
-      //   prediction: {...}
-      // }
-      //
-      // OR:
-      //
-      // {
-      //   viralityScore: ...
-      // }
+      // ========================================================
+      // GET REAL PREDICTION
+      // ========================================================
+
+      /*
+       * server.ts returns:
+       *
+       * {
+       *   success: true,
+       *   prediction: {...},
+       *   recommendation_report: {...},
+       *   recommendations: [...],
+       *   explainable_ai: {...}
+       * }
+       *
+       * We must NOT throw away those fields.
+       */
 
       const prediction =
         data.prediction ?? data;
 
-      if (
-        !prediction ||
-        typeof prediction.viralityScore !==
-          "number"
-      ) {
+      if (!prediction) {
         throw new Error(
           data.message ||
-            "Backend did not return valid prediction data."
+            "Backend did not return prediction data."
         );
       }
 
       // ========================================================
-      // NORMALIZE RESPONSE
+      // REAL VIRALITY SCORE
       // ========================================================
+
+      /*
+       * The real FastAPI ML model returns:
+       *
+       * viral_probability
+       *
+       * Example:
+       *
+       * 0.791
+       *
+       * This means:
+       *
+       * 79.1%
+       *
+       * If server.ts has already converted this to
+       * viralityScore, use that value.
+       *
+       * Otherwise convert the real ML probability here.
+       *
+       * NO RANDOM VALUE.
+       * NO MOCK VALUE.
+       */
+
+      let realViralityScore =
+        Number(
+          prediction.viralityScore
+        );
+
+      if (
+        !Number.isFinite(
+          realViralityScore
+        )
+      ) {
+        const realProbability =
+          Number(
+            prediction.viral_probability
+          );
+
+        if (
+          Number.isFinite(
+            realProbability
+          )
+        ) {
+          realViralityScore =
+            realProbability * 100;
+        }
+      }
+
+      if (
+        !Number.isFinite(
+          realViralityScore
+        )
+      ) {
+        throw new Error(
+          "Backend did not return a valid ML virality probability."
+        );
+      }
+
+      // Keep score between 0 and 100.
+      realViralityScore =
+        Math.max(
+          0,
+          Math.min(
+            100,
+            realViralityScore
+          )
+        );
+
+      // ========================================================
+      // KEEP REAL BACKEND RESPONSE
+      // ========================================================
+
+      /*
+       * IMPORTANT FIX:
+       *
+       * Previously your code created:
+       *
+       * {
+       *   success: true,
+       *   prediction: prediction
+       * }
+       *
+       * That removed:
+       *
+       * recommendation_report
+       * recommendations
+       * explainable_ai
+       *
+       * Now we keep ALL fields returned by server.ts.
+       */
+
+      const normalizedPrediction = {
+        ...prediction,
+
+        /*
+         * Only add viralityScore when the backend did not
+         * already provide it.
+         *
+         * This is still the real ML probability.
+         */
+        viralityScore:
+          Number.isFinite(
+            Number(
+              prediction.viralityScore
+            )
+          )
+            ? Number(
+                prediction.viralityScore
+              )
+            : realViralityScore,
+      };
 
       const normalizedResponse:
         PredictApiResponse = {
+        ...data,
+
         success: true,
-        prediction: prediction,
+
+        prediction:
+          normalizedPrediction,
+
+        /*
+         * VERY IMPORTANT:
+         * Preserve recommendation report.
+         */
+        recommendation_report:
+          data.recommendation_report,
+
+        /*
+         * Preserve recommendation list.
+         */
+        recommendations:
+          data.recommendations,
+
+        /*
+         * Preserve explainable AI data.
+         */
+        explainable_ai:
+          data.explainable_ai,
       };
 
       console.log(
-        "Normalized prediction:",
+        "Normalized REAL prediction:",
         normalizedResponse
+      );
+
+      console.log(
+        "Recommendation report:",
+        normalizedResponse
+          .recommendation_report
       );
 
       // ========================================================
@@ -400,39 +582,47 @@ function App() {
       // CREATE REAL-TIME HISTORY ENTRY
       // ========================================================
 
-      const viralityScore = Math.max(
-        0,
-        Math.min(
-          100,
-          Number(
-            prediction.viralityScore
+      const viralityScore =
+        Math.max(
+          0,
+          Math.min(
+            100,
+            Number(
+              normalizedPrediction
+                .viralityScore
+            )
           )
-        )
-      );
+        );
 
       const confidenceValue =
         Number.isFinite(
           Number(
-            prediction.confidence
+            normalizedPrediction
+              .confidence
           )
         )
           ? Number(
-              prediction.confidence
+              normalizedPrediction
+                .confidence
             )
           : viralityScore;
 
       const predictedReach =
-        prediction.predictedReach ??
+        normalizedPrediction
+          .predictedReach ??
+        normalizedPrediction
+          .reachForecast ??
         "—";
 
-      const newHistory: HistoryEntry = {
-        id: Date.now().toString(),
+      const newHistory:
+        HistoryEntry = {
+        id:
+          Date.now().toString(),
 
         platform:
           targetInput.platform,
 
         viralityScore:
-
           Number.isFinite(
             viralityScore
           )
@@ -463,37 +653,85 @@ function App() {
       };
 
       // ========================================================
-      // IMMEDIATE REAL-TIME UPDATE
+      // SAVE TO FIRESTORE FIRST
       // ========================================================
       //
-      // Do this immediately.
-      //
-      // The Dashboard and Analytics do NOT have to wait
-      // for Firestore before showing the new prediction.
+      // Firestore is the permanent source of truth.
+      // We wait for the write to succeed before updating the
+      // local React history. This prevents the UI from showing
+      // a new count that disappears after a page refresh.
       // ========================================================
+
+      const firestoreUserId =
+        currentUser?.uid || "guest_user";
+
+      let firestorePredictionId: string;
+
+      try {
+        firestorePredictionId =
+          await savePredictionToCloud(
+            firestoreUserId,
+            {
+              platform: targetInput.platform,
+              caption: targetInput.caption,
+              captionSnippet: targetInput.caption,
+              imageUrl: imageBase64,
+              followers: targetInput.follower_count,
+              likes: targetInput.early_likes,
+              comments: targetInput.early_comments,
+              postingTime: targetInput.post_hour,
+              viralityScore: viralityScore,
+              confidence: confidenceValue,
+              predictedReach: predictedReach,
+              performanceCategory:
+                normalizedPrediction.performanceCategory,
+              topHook: normalizedPrediction.topHook,
+              timestamp: new Date().toISOString(),
+            }
+          );
+
+        console.log(
+          "\u2705 Prediction successfully persisted to Firestore:",
+          firestorePredictionId
+        );
+      } catch (firestoreError: any) {
+        console.error(
+          "\u274c Prediction was NOT persisted to Firestore:",
+          firestoreError
+        );
+
+        throw new Error(
+          firestoreError?.message ||
+            "Prediction was generated but could not be saved to Firestore. Please check your Firestore permissions and try again."
+        );
+      }
+
+      // ========================================================
+      // UPDATE LOCAL HISTORY ONLY AFTER FIRESTORE SUCCESS
+      // ========================================================
+
+      const persistedHistoryEntry: HistoryEntry = {
+        ...newHistory,
+        id: firestorePredictionId,
+      };
 
       setPredictionHistory(
         (previousHistory) => [
-          newHistory,
+          persistedHistoryEntry,
 
           ...previousHistory
             .filter(
               (item) =>
-                item.id !==
-                newHistory.id
+                item.id !== firestorePredictionId
             )
             .slice(0, 49),
         ]
       );
 
-      // ========================================================
-      // SAVE TO FIRESTORE
-      // ========================================================
-      //
-      // Firestore subscription will then synchronize this
-      // prediction in real time across the website.
-      // ========================================================
-
+      console.log(
+        "\u2705 Local prediction history updated from persisted Firestore document:",
+        firestorePredictionId
+      );
 
     } catch (err: any) {
       console.error(
@@ -516,13 +754,6 @@ function App() {
   // ============================================================
   // REAL-TIME PREDICTION SYNC
   // ============================================================
-  //
-  // When real-time mode is enabled and the user changes
-  // prediction input, the backend is called automatically.
-  //
-  // This makes the prediction data update according to
-  // the user's activity.
-  // ============================================================
 
   useEffect(() => {
     if (!realtimeSync) {
@@ -531,7 +762,8 @@ function App() {
 
     const hasContent = Boolean(
       (predictionInput.caption &&
-        predictionInput.caption.trim()
+        predictionInput.caption
+          .trim()
           .length > 0) ||
         predictionInput.image !== null
     );
@@ -602,6 +834,11 @@ function App() {
               apiResponse?.prediction
             }
 
+            /*
+             * IMPORTANT:
+             * The REAL recommendation report from
+             * recommendation_engine.py is passed here.
+             */
             recommendationReport={
               apiResponse?.recommendation_report
             }
@@ -661,7 +898,8 @@ function App() {
 
   return (
     <>
-      {!currentUser && !guestAccess ? (
+      {!currentUser &&
+      !guestAccess ? (
         <AuthGateView
           onGuestAccess={() => {
             setGuestAccess(true);

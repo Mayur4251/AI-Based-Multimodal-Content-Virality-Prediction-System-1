@@ -1,10 +1,25 @@
 """
-Multimodal Content Virality Prediction - Training Pipeline
+Multimodal Content Virality Prediction - Training Pipeline (FIXED)
 Matches architecture described in Major_Project_Report_Final_2.docx:
-  - Textual features: TF-IDF + Sentiment Analysis (VADER)
-  - Metadata features: engagement/temporal/follower signals
+  - Textual features: TF-IDF + Sentiment Analysis (VADER) + hook/hashtag signals
+  - Metadata features: PRE-PUBLISH ONLY (timing/follower signals -- no
+    post-publish engagement counts)
   - Ensemble classifiers: Random Forest, SVM, XGBoost (+ soft-voting ensemble)
   - Explainability: SHAP feature importance
+
+WHAT CHANGED FROM THE ORIGINAL PIPELINE
+----------------------------------------
+1. Trains on data/posts_relabeled.csv (see relabel_dataset.py) instead of
+   posts_merged_dataset.csv, because the original `viral` label was derived
+   from random engagement numbers with no real link to caption/content.
+2. early_likes, early_shares, early_comments, saves, reach, impressions are
+   REMOVED from the feature set entirely (not just engagement_rate /
+   performance_bucket_label). Those raw counts were the actual leak -- SHAP
+   previously ranked early_likes/impressions/saves as the top 4 predictors
+   because they're the literal ingredients of the label. A real user does
+   not have these numbers before publishing, so the model must never see
+   them, at train time or inference time.
+3. Adds hook_score and hashtag_count as legitimate pre-publish text signals.
 
 NOTE: The dataset references image files (image_path column) but no image
 folder was uploaded alongside the CSV, so the CNN/visual branch is NOT
@@ -17,6 +32,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 CONFIG_DIR = BASE_DIR / "config"
+
+# Point this at the relabeled file produced by relabel_dataset.py.
+DATA_FILE = DATA_DIR / "posts_relabeled.csv"
 
 import json
 import warnings
@@ -50,11 +68,36 @@ except ImportError:  # pragma: no cover - fallback for missing dependency
 
 RANDOM_STATE = 42
 
+HOOK_PHRASES = [
+    "you won't believe", "wait for it", "here's why", "how to",
+    "the truth about", "nobody talks about", "this changed",
+    "before and after", "vs", "top ", "?",
+]
+
+
+def hook_score(caption: str) -> float:
+    c = caption.lower()
+    hits = sum(1 for phrase in HOOK_PHRASES if phrase in c)
+    return min(hits, 3) / 3.0
+
+
+def hashtag_count(row) -> int:
+    tag_field = str(row.get("hashtags", "") or "")
+    if tag_field.strip():
+        return len([t for t in tag_field.replace(",", " ").split() if t.strip()])
+    return str(row.get("caption", "")).count("#")
+
+
 # --------------------------------------------------------------------------
 # 1. LOAD + CLEAN
 # --------------------------------------------------------------------------
-print("Loading raw dataset...")
-df = pd.read_csv(DATA_DIR / "posts_merged_dataset.csv")
+print(f"Loading raw dataset from {DATA_FILE.name} ...")
+if not DATA_FILE.exists():
+    raise SystemExit(
+        f"{DATA_FILE} not found. Run relabel_dataset.py first to generate it "
+        f"from posts_merged_dataset.csv."
+    )
+df = pd.read_csv(DATA_FILE)
 print(f"Raw shape: {df.shape}")
 
 before = len(df)
@@ -62,9 +105,11 @@ df = df.drop_duplicates(subset="post_id").reset_index(drop=True)
 df = df.dropna(subset=["caption", "viral"]).reset_index(drop=True)
 df["caption"] = df["caption"].astype(str).str.strip()
 df = df[df["caption"].str.len() > 0].reset_index(drop=True)
-# clip any negative/impossible numeric values defensively
-numeric_cols = ["post_hour", "day_of_week", "follower_count", "early_likes",
-                 "early_shares", "early_comments", "saves", "reach", "impressions"]
+
+# Only clip/validate PRE-PUBLISH numeric columns. Engagement columns may
+# still exist in the CSV (e.g. for the recommendation engine / analytics
+# dashboard) but are intentionally excluded from numeric_cols / features.
+numeric_cols = ["post_hour", "day_of_week", "follower_count"]
 for c in numeric_cols:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 df = df.dropna(subset=numeric_cols).reset_index(drop=True)
@@ -74,39 +119,43 @@ for c in numeric_cols:
 print(f"Cleaned shape: {df.shape} (removed {before - len(df)} rows)")
 
 # --------------------------------------------------------------------------
-# 2. LEAKAGE CHECK / TARGET DEFINITION
+# 2. LEAKAGE / EXCLUDED COLUMNS
 # --------------------------------------------------------------------------
-# engagement_rate and performance_bucket_label are DERIVED FROM the same
-# early engagement counts used to build `viral` (viral == 1 exactly when
-# performance_bucket_label == 'viral', and engagement_rate is essentially
-# (early_likes+early_shares+early_comments+saves)/impressions).
-# We drop engagement_rate + performance_bucket_label from the feature set
-# so the model has to learn from early raw signals instead of the
-# pre-computed label formula.
+# Everything here is either derived from the label (engagement_rate,
+# performance_bucket_label) or is a POST-PUBLISH outcome a real user would
+# never have at prediction time (early_likes, early_shares, early_comments,
+# saves, reach, impressions). None of these are used as model features.
 TARGET = "viral"
-LEAK_COLS = ["engagement_rate", "performance_bucket_label"]
+EXCLUDED_COLS = [
+    "engagement_rate", "performance_bucket_label",
+    "early_likes", "early_shares", "early_comments",
+    "saves", "reach", "impressions",
+    "viral_probability",  # only present in relabeled file as a debug column
+]
 ID_COLS = ["post_id", "source_image_name", "image_path"]
 
 # --------------------------------------------------------------------------
-# 3. TEXT FEATURES: TF-IDF + VADER sentiment
+# 3. TEXT FEATURES: TF-IDF + VADER sentiment + hook/hashtag signals
 # --------------------------------------------------------------------------
-print("Extracting text features (TF-IDF + VADER sentiment)...")
+print("Extracting text features (TF-IDF + VADER sentiment + hooks)...")
 sia = SentimentIntensityAnalyzer()
 sent = df["caption"].apply(sia.polarity_scores).apply(pd.Series)
 sent.columns = [f"sent_{c}" for c in sent.columns]  # sent_neg, sent_neu, sent_pos, sent_compound
 df["caption_len"] = df["caption"].str.len()
 df["caption_word_count"] = df["caption"].str.split().apply(len)
+df["hook_score"] = df["caption"].apply(hook_score)
+df["hashtag_count"] = df.apply(hashtag_count, axis=1)
 
 tfidf = TfidfVectorizer(max_features=300, stop_words="english", ngram_range=(1, 2))
 tfidf_matrix = tfidf.fit_transform(df["caption"])
 
 # --------------------------------------------------------------------------
-# 4. METADATA FEATURES
+# 4. METADATA FEATURES (pre-publish only)
 # --------------------------------------------------------------------------
-print("Building metadata features...")
-meta_numeric = ["post_hour", "day_of_week", "follower_count", "early_likes",
-                 "early_shares", "early_comments", "saves", "reach",
-                 "impressions", "caption_len", "caption_word_count"]
+print("Building metadata features (pre-publish only)...")
+meta_numeric = ["post_hour", "day_of_week", "follower_count",
+                 "caption_len", "caption_word_count", "hook_score",
+                 "hashtag_count"]
 meta_numeric_df = pd.concat([df[meta_numeric], sent], axis=1)
 
 ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=True)
@@ -126,6 +175,10 @@ feature_names = (list(tfidf.get_feature_names_out())
                   + list(meta_numeric_df.columns)
                   + list(ohe.get_feature_names_out(["media_type", "content_category"])))
 print(f"Final feature matrix: {X.shape}")
+assert not any(col in feature_names for col in EXCLUDED_COLS), (
+    "A post-publish/leakage column ended up in the feature set -- check "
+    "meta_numeric above."
+)
 
 # --------------------------------------------------------------------------
 # 6. TRAIN / TEST SPLIT
@@ -195,6 +248,13 @@ for name, model in [("Random Forest", rf), ("SVM", svm), ("XGBoost", xgb),
 results_df = pd.DataFrame(results)
 print("\n\nFull comparison table:")
 print(results_df.to_string(index=False))
+if results_df["roc_auc"].max() < 0.6:
+    print(
+        "\nWARNING: best ROC-AUC is still close to 0.5 (coin flip). "
+        "This means there's still not enough genuine signal linking your "
+        "features to the label -- revisit relabel_dataset.py's weights "
+        "before trusting this model."
+    )
 
 # classification report + confusion matrix for the best model (ensemble)
 best_pred = ensemble.predict(X_test)
@@ -208,14 +268,17 @@ print(cm)
 # 9. SAVE ARTIFACTS FOR BACKEND
 # --------------------------------------------------------------------------
 print("\nSaving artifacts...")
-joblib.dump(rf, "models/model_random_forest.joblib")
-joblib.dump(svm, "models/model_svm.joblib")
-joblib.dump(xgb, "models/model_xgboost.joblib")
-joblib.dump(ensemble, "models/model_ensemble.joblib")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-joblib.dump(tfidf, "models/vectorizer_tfidf.joblib")
-joblib.dump(scaler, "models/scaler_metadata.joblib")
-joblib.dump(ohe, "models/encoder_categorical.joblib")
+joblib.dump(rf, MODELS_DIR / "model_random_forest.joblib")
+joblib.dump(svm, MODELS_DIR / "model_svm.joblib")
+joblib.dump(xgb, MODELS_DIR / "model_xgboost.joblib")
+joblib.dump(ensemble, MODELS_DIR / "model_ensemble.joblib")
+
+joblib.dump(tfidf, MODELS_DIR / "vectorizer_tfidf.joblib")
+joblib.dump(scaler, MODELS_DIR / "scaler_metadata.joblib")
+joblib.dump(ohe, MODELS_DIR / "encoder_categorical.joblib")
 
 df.to_csv(DATA_DIR / "posts_cleaned.csv", index=False)
 results_df.to_csv(CONFIG_DIR / "model_comparison.csv", index=False)
@@ -231,8 +294,11 @@ with open(CONFIG_DIR / "schema.json", "w") as f:
         "sentiment_columns": list(sent.columns),
         "categorical_columns": ["media_type", "content_category"],
         "target_column": "viral",
-        "dropped_leakage_columns": LEAK_COLS,
+        "excluded_columns": EXCLUDED_COLS,
         "id_columns_not_used_as_features": ID_COLS,
+        "note": "early_likes/early_shares/early_comments/saves/reach/impressions "
+                "are POST-PUBLISH outcomes and are never used as features, "
+                "at train time or inference time.",
     }, f, indent=2)
 
 # --------------------------------------------------------------------------
@@ -266,5 +332,10 @@ with open(CONFIG_DIR / "shap_top_features.json", "w") as f:
 print("Top 15 features driving virality predictions:")
 for row in top_features[:15]:
     print(f"  {row['feature']}: {row['mean_abs_shap']}")
+print(
+    "\nSanity check: none of these should be early_likes/early_shares/"
+    "early_comments/saves/reach/impressions -- they were never in the "
+    "feature set, so they cannot appear here."
+)
 
 print("\nDone.")

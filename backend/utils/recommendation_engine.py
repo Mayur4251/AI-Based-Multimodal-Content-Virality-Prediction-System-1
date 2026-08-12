@@ -3,171 +3,485 @@
 from typing import Dict, List, Any, Optional
 import re
 
-# ====================== HASHTAG LIBRARY ======================
+
+# ============================================================
+# WHAT CHANGED IN THIS FILE
+# ============================================================
+# The prediction request no longer includes early_likes / early_shares /
+# early_comments / saves / reach / impressions, because those are
+# POST-PUBLISH outcomes a user predicting virality BEFORE posting never
+# has. The old version of this file pulled those fields via _safe_int(),
+# which silently turned "missing" into 0 -- so every pre-publish report
+# said things like "No shares were recorded" and "No saves were recorded"
+# as if the post had already flopped, when really it just hadn't been
+# published yet. That was actively misleading.
+#
+# Fix: engagement numbers are now OPTIONAL and default to None, not 0.
+# analyze_engagement() / the "current post performance" section only runs
+# when real engagement data is explicitly supplied (e.g. if you later add
+# a "check how my published post is doing" endpoint that passes real
+# numbers). For the pre-publish prediction flow, the report is built from
+# caption quality, hashtags, category, and timing -- the signals a user
+# actually controls before hitting "post" -- plus the ML model's
+# probability output.
+
+
+# ============================================================
+# HASHTAG LIBRARY
+# ============================================================
+
 HASHTAG_LIBRARY = {
     "professional": [
-        "#ProfessionalGrowth", "#CareerGrowth", "#SuccessMindset",
-        "#Leadership", "#BusinessLife", "#CorporateLife",
-        "#WorkHard", "#Motivation", "#Entrepreneur", "#LinkedInTips"
+        "#ProfessionalGrowth",
+        "#CareerGrowth",
+        "#SuccessMindset",
+        "#Leadership",
+        "#BusinessLife",
+        "#CorporateLife",
+        "#WorkHard",
+        "#Motivation",
+        "#Entrepreneur",
+        "#LinkedInTips",
     ],
     "lifestyle": [
-        "#Lifestyle", "#DailyLife", "#SelfCare", "#Inspiration",
-        "#Mindset", "#PositiveVibes", "#GoodVibes", "#LifeGoals"
+        "#Lifestyle",
+        "#DailyLife",
+        "#SelfCare",
+        "#Inspiration",
+        "#Mindset",
+        "#PositiveVibes",
+        "#GoodVibes",
+        "#LifeGoals",
     ],
     "fitness": [
-        "#FitnessMotivation", "#GymLife", "#Workout", "#HealthyLifestyle",
-        "#FitFam", "#NoDaysOff", "#TrainHard", "#FitnessJourney"
+        "#FitnessMotivation",
+        "#GymLife",
+        "#Workout",
+        "#HealthyLifestyle",
+        "#FitFam",
+        "#NoDaysOff",
+        "#TrainHard",
+        "#FitnessJourney",
     ],
     "travel": [
-        "#TravelGram", "#Wanderlust", "#Explore", "#TravelDiaries",
-        "#Adventure", "#TravelPhotography", "#InstaTravel"
+        "#TravelGram",
+        "#Wanderlust",
+        "#Explore",
+        "#TravelDiaries",
+        "#Adventure",
+        "#TravelPhotography",
+        "#InstaTravel",
     ],
     "food": [
-        "#Foodie", "#FoodPhotography", "#Yummy", "#FoodLover",
-        "#InstaFood", "#Delicious", "#HomeCooking"
+        "#Foodie",
+        "#FoodPhotography",
+        "#Yummy",
+        "#FoodLover",
+        "#InstaFood",
+        "#Delicious",
+        "#HomeCooking",
     ],
     "default": [
-        "#Inspiration", "#Motivation", "#DailyLife", "#Growth",
-        "#Mindset", "#Success", "#PositiveVibes"
-    ]
+        "#Inspiration",
+        "#Motivation",
+        "#DailyLife",
+        "#Growth",
+        "#Mindset",
+        "#Success",
+        "#PositiveVibes",
+    ],
 }
+
+
+# ============================================================
+# PLATFORM POSTING WINDOWS
+# ============================================================
 
 OPTIMAL_POSTING_TIMES = {
     "instagram": {
         "best_window": "6:00 PM – 9:00 PM",
-        "reason": "Most people in professional and lifestyle niches are active after work.",
-        "expected_boost": "+15–18%"
+        "hours": range(18, 22),
+        "reason": "Evening is commonly a strong engagement period for Instagram audiences.",
+    },
+    "facebook": {
+        "best_window": "6:00 PM – 9:00 PM",
+        "hours": range(18, 22),
+        "reason": "Evening activity can be strong when users have more time to browse and interact.",
     },
     "linkedin": {
         "best_window": "8:00 AM – 10:00 AM",
-        "reason": "Professionals usually check LinkedIn in the morning.",
-        "expected_boost": "+20%"
+        "hours": range(8, 11),
+        "reason": "Professional audiences are often active around the start of the working day.",
     },
     "twitter": {
         "best_window": "12:00 PM – 3:00 PM",
-        "reason": "Midday is the peak scrolling window on Twitter/X.",
-        "expected_boost": "+12%"
+        "hours": range(12, 16),
+        "reason": "Midday can be a useful engagement window for short-form updates.",
+    },
+    "x": {
+        "best_window": "12:00 PM – 3:00 PM",
+        "hours": range(12, 16),
+        "reason": "Midday can be a useful engagement window for short-form updates.",
     },
     "default": {
         "best_window": "6:00 PM – 9:00 PM",
-        "reason": "Evening hours give the highest engagement for most platforms.",
-        "expected_boost": "+15%"
-    }
+        "hours": range(18, 22),
+        "reason": "Evening is used as a general starting point when platform-specific data is unavailable.",
+    },
 }
 
 
-class RecommendationEngine:
-    """Compatibility wrapper for the backend API and tests."""
+# ============================================================
+# HELPERS
+# ============================================================
 
-    def __init__(self, dataset_path: Optional[str] = None) -> None:
-        self.dataset_path = dataset_path
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
 
-    def generate_report(self, post_payload: Dict[str, Any], prediction: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        caption = str(post_payload.get("caption") or "")
-        platform = str(post_payload.get("platform") or "Instagram")
-        current_hashtags = post_payload.get("hashtags") or []
-        if not isinstance(current_hashtags, list):
-            current_hashtags = []
+        if isinstance(value, bool):
+            return int(value)
 
-        post_time = post_payload.get("post_time") or post_payload.get("post_hour") or "8:13"
-        if isinstance(post_time, int):
-            post_time = f"{post_time}:00"
-
-        likes = int(post_payload.get("early_likes") or 0)
-        comments = int(post_payload.get("early_comments") or 0)
-        shares = int(post_payload.get("early_shares") or 0)
-        saves = int(post_payload.get("saves") or 0)
-
-        virality_score = 46.0
-        if prediction:
-            virality_value = prediction.get("viral_probability", prediction.get("virality", prediction.get("score", 46.0)))
-            if isinstance(virality_value, (int, float)):
-                virality_score = float(virality_value) * 100 if 0.0 <= float(virality_value) <= 1.0 else float(virality_value)
-
-        content_score = prediction.get("content_score", 37.3) if prediction else 37.3
-        image_analysis = post_payload.get("image_analysis")
-
-        report = build_full_recommendation(
-            caption=caption,
-            platform=platform,
-            current_hashtags=current_hashtags,
-            post_time=str(post_time),
-            likes=likes,
-            comments=comments,
-            shares=shares,
-            saves=saves,
-            virality_score=virality_score,
-            content_score=float(content_score or 37.3),
-            image_analysis=image_analysis,
-        )
-
-        report["priority_actions"] = report.get("final_action_plan", {}).get("today", [])
-        report["hashtag_analysis"] = report["suggested_hashtags"]
-        report["action_plan"] = report.get("final_action_plan", {}).get("today", [])
-        report["top_factors"] = report["explainable_ai"]
-        report["explainability"] = {
-            "top_factors": report["explainable_ai"],
-            "action_plan": report.get("final_action_plan", {}).get("today", []),
-            "hashtag_analysis": report["suggested_hashtags"],
-        }
-        return report
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return default
 
 
-def detect_content_category(caption: str, keywords: List[str] = None) -> str:
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalise_text_list(value: Any) -> List[str]:
+    """
+    Converts strings/lists into a clean list.
+
+    Examples:
+
+    "#fitness #gym"
+        -> ["#fitness", "#gym"]
+
+    "fitness, gym, workout"
+        -> ["fitness", "gym", "workout"]
+
+    ["#fitness", "#gym"]
+        -> ["#fitness", "#gym"]
+    """
+
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        raw_items = value
+
+    elif isinstance(value, tuple):
+        raw_items = list(value)
+
+    elif isinstance(value, str):
+        text = value.strip()
+
+        if not text:
+            return []
+
+        # Handle hashtags such as:
+        # "#fitness #gym #workout"
+        hashtag_matches = re.findall(r"#[A-Za-z0-9_]+", text)
+
+        if hashtag_matches:
+            raw_items = hashtag_matches
+        else:
+            # Handle comma / newline / semicolon separated values
+            raw_items = re.split(r"[,;\n]+", text)
+
+            # If still one item containing spaces, treat words as
+            # separate keywords only when it looks like a list.
+            if len(raw_items) == 1 and " " in text:
+                raw_items = text.split()
+
+    else:
+        return []
+
+    cleaned = []
+
+    for item in raw_items:
+        item = str(item).strip()
+
+        if not item:
+            continue
+
+        if item not in cleaned:
+            cleaned.append(item)
+
+    return cleaned
+
+
+def _parse_hour(value: Any) -> Optional[int]:
+    """
+    Convert:
+        18
+        "18"
+        "18:30"
+        "6:30 PM"
+        "6 PM"
+
+    into an hour from 0–23.
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        hour = int(value)
+        return hour if 0 <= hour <= 23 else None
+
+    text = str(value).strip().upper()
+
+    if not text:
+        return None
+
+    # 18:30
+    match = re.match(r"^(\d{1,2})(?::\d{1,2})?$", text)
+
+    if match:
+        hour = int(match.group(1))
+        return hour if 0 <= hour <= 23 else None
+
+    # 6 PM / 6:30 PM
+    match = re.match(r"^(\d{1,2})(?::\d{1,2})?\s*(AM|PM)$", text)
+
+    if match:
+        hour = int(match.group(1))
+        period = match.group(2)
+
+        if hour < 1 or hour > 12:
+            return None
+
+        if period == "AM":
+            return 0 if hour == 12 else hour
+
+        return 12 if hour == 12 else hour + 12
+
+    return None
+
+
+# ============================================================
+# CATEGORY DETECTION
+# ============================================================
+
+def detect_content_category(
+    caption: str,
+    keywords: Optional[List[str]] = None
+) -> str:
+
     text = (caption or "").lower()
-    if keywords:
-        text += " " + " ".join(k.lower() for k in keywords)
 
-    if any(w in text for w in ["professional", "career", "business", "corporate", "suit", "office", "leadership", "attire", "work"]):
+    if keywords:
+        text += " " + " ".join(str(k).lower() for k in keywords)
+
+    if any(
+        word in text
+        for word in [
+            "professional",
+            "career",
+            "business",
+            "corporate",
+            "suit",
+            "office",
+            "leadership",
+            "attire",
+            "work",
+            "job",
+            "resume",
+            "interview",
+        ]
+    ):
         return "professional"
-    if any(w in text for w in ["gym", "workout", "fitness", "train", "muscle", "exercise"]):
+
+    if any(
+        word in text
+        for word in [
+            "gym",
+            "workout",
+            "fitness",
+            "train",
+            "muscle",
+            "exercise",
+            "health",
+            "weight",
+            "running",
+        ]
+    ):
         return "fitness"
-    if any(w in text for w in ["travel", "trip", "vacation", "explore", "destination", "flight"]):
+
+    if any(
+        word in text
+        for word in [
+            "travel",
+            "trip",
+            "vacation",
+            "explore",
+            "destination",
+            "flight",
+            "holiday",
+            "tour",
+        ]
+    ):
         return "travel"
-    if any(w in text for w in ["food", "recipe", "delicious", "cook", "restaurant", "meal"]):
+
+    if any(
+        word in text
+        for word in [
+            "food",
+            "recipe",
+            "delicious",
+            "cook",
+            "restaurant",
+            "meal",
+            "cooking",
+            "dish",
+        ]
+    ):
         return "food"
-    if any(w in text for w in ["lifestyle", "selfcare", "mindset", "daily", "routine"]):
+
+    if any(
+        word in text
+        for word in [
+            "lifestyle",
+            "selfcare",
+            "mindset",
+            "daily",
+            "routine",
+            "life",
+            "motivation",
+        ]
+    ):
         return "lifestyle"
+
     return "default"
 
 
+# ============================================================
+# CAPTION ANALYSIS
+# ============================================================
+
 def analyze_caption(caption: str) -> Dict[str, Any]:
-    caption = caption or ""
+
+    caption = str(caption or "").strip()
+
     words = caption.split()
+
     word_count = len(words)
     char_count = len(caption)
 
     has_question = "?" in caption
-    has_cta = any(phrase in caption.lower() for phrase in [
-        "tag", "comment", "share", "what do you think", "drop", "let me know",
-        "tell me", "your thoughts", "👇", "link in bio", "save this"
-    ])
-    has_emoji = bool(re.search(r'[\U0001F300-\U0001F9FF]', caption))
-    has_story = word_count > 20 and any(w in caption.lower() for w in ["i", "my", "me", "today", "learned", "realized"])
+
+    has_cta = any(
+        phrase in caption.lower()
+        for phrase in [
+            "tag",
+            "comment",
+            "share",
+            "what do you think",
+            "drop",
+            "let me know",
+            "tell me",
+            "your thoughts",
+            "save this",
+            "follow",
+            "reply",
+        ]
+    )
+
+    has_emoji = bool(
+        re.search(
+            r"[\U0001F300-\U0001F9FF]",
+            caption
+        )
+    )
+
+    has_story = (
+        word_count > 20
+        and any(
+            word in caption.lower()
+            for word in [
+                "i",
+                "my",
+                "me",
+                "today",
+                "learned",
+                "realized",
+                "experience",
+            ]
+        )
+    )
 
     problems = []
-    if word_count < 12:
-        problems.append(f"Caption is very short ({word_count} words). Longer captions with context perform better.")
+
+    if word_count == 0:
+        problems.append(
+            "No caption was provided. A clear caption gives the audience context."
+        )
+
+    elif word_count < 12:
+        problems.append(
+            f"Caption is very short ({word_count} words). "
+            "Consider adding useful context or a stronger hook."
+        )
+
     elif word_count < 18:
-        problems.append(f"Caption is a bit short ({word_count} words). Adding a bit more context helps.")
+        problems.append(
+            f"Caption is somewhat short ({word_count} words). "
+            "A little more context may improve engagement."
+        )
 
     if not has_question:
-        problems.append("No question asked — questions are one of the best ways to get comments.")
+        problems.append(
+            "There is no direct question, so there is less encouragement for comments."
+        )
+
     if not has_cta:
-        problems.append("No clear call-to-action (no invitation to tag, comment, or share).")
+        problems.append(
+            "There is no clear call-to-action asking the audience to interact."
+        )
+
     if not has_emoji:
-        problems.append("No emojis used. 1–2 relevant emojis can make the caption feel more human.")
+        problems.append(
+            "No emoji was detected. A relevant emoji can make the caption easier to scan."
+        )
+
     if not has_story and word_count < 25:
-        problems.append("Caption mostly describes the photo instead of telling a short personal story.")
+        problems.append(
+            "The caption could provide more personal context or a useful takeaway."
+        )
 
     score = 100
-    if word_count < 12: score -= 30
-    elif word_count < 18: score -= 15
-    if not has_question: score -= 18
-    if not has_cta: score -= 15
-    if not has_emoji: score -= 8
-    if not has_story: score -= 10
-    score = max(25, score)
+
+    if word_count == 0:
+        score -= 40
+    elif word_count < 12:
+        score -= 25
+    elif word_count < 18:
+        score -= 12
+
+    if not has_question:
+        score -= 15
+
+    if not has_cta:
+        score -= 12
+
+    if not has_emoji:
+        score -= 5
+
+    if not has_story:
+        score -= 8
+
+    score = max(20, min(100, score))
 
     return {
         "current_caption": caption,
@@ -180,128 +494,433 @@ def analyze_caption(caption: str) -> Dict[str, Any]:
         "has_emoji": has_emoji,
         "has_question": has_question,
         "has_story": has_story,
-        "expected_improvement": "+15% to +20%"
     }
 
 
-def generate_ai_caption(caption: str, category: str, problems: List[str]) -> Dict[str, Any]:
-    """Generate a better caption based on the actual problems found."""
-    base = caption.strip()
-    if not base:
-        base = "Ready for the next chapter."
+# ============================================================
+# CAPTION SUGGESTION
+# ============================================================
 
-    # Start with the original idea and improve it
+def generate_ai_caption(
+    caption: str,
+    category: str,
+    problems: List[str]
+) -> Dict[str, Any]:
+
+    base = str(caption or "").strip()
+
+    if not base:
+        base = "A new idea, a new experience, and another step forward."
+
     if category == "professional":
+
         improved = (
             f"{base}\n\n"
-            "Professional growth isn’t about looking perfect — it’s about showing up consistently.\n\n"
-            "What’s one lesson that helped you grow in your career?\n\n"
-            "Tag someone who’s building something meaningful. 💼"
+            "Sharing one practical lesson from this experience.\n\n"
+            "What is one lesson that has helped you grow professionally?"
         )
+
     elif category == "fitness":
+
         improved = (
             f"{base}\n\n"
-            "Progress is built one session at a time.\n\n"
-            "What’s one habit you’re locking in this week?\n\n"
-            "Tag your workout partner. 💪"
+            "Progress comes from consistency, not one perfect workout.\n\n"
+            "What fitness habit are you working on this week?"
         )
-    else:
+
+    elif category == "travel":
+
         improved = (
             f"{base}\n\n"
-            "Small moments create big feelings.\n\n"
-            "What do you think?\n\n"
-            "Tag someone who needs to see this. ✨"
+            "Every place has a story worth remembering.\n\n"
+            "Which destination would you visit next?"
+        )
+
+    elif category == "food":
+
+        improved = (
+            f"{base}\n\n"
+            "Good food becomes even better when there is a story behind it.\n\n"
+            "Would you try this?"
+        )
+
+    else:
+
+        improved = (
+            f"{base}\n\n"
+            "There is always something new to learn from everyday moments.\n\n"
+            "What do you think?"
         )
 
     return {
         "ai_suggested_caption": improved,
-        "engagement_boost": "+17%",
-        "comments_boost": "+15%"
+        "reason": (
+            "The suggested version keeps the original idea while adding "
+            "context and an interaction prompt."
+        ),
     }
 
 
-def get_suggested_hashtags(category: str, current_hashtags: List[str] = None) -> Dict[str, Any]:
-    library = HASHTAG_LIBRARY.get(category, HASHTAG_LIBRARY["default"])
-    current = [h if h.startswith("#") else f"#{h}" for h in (current_hashtags or [])]
-    recommended = [tag for tag in library if tag not in current][:6]
+# ============================================================
+# HASHTAG ANALYSIS
+# ============================================================
 
-    reason = f"These hashtags match the {category} theme of your post and will help the right people find it."
+def get_suggested_hashtags(
+    category: str,
+    current_hashtags: Optional[List[str]] = None,
+    keywords: Optional[List[str]] = None
+) -> Dict[str, Any]:
+
+    current = []
+
+    for hashtag in current_hashtags or []:
+
+        clean = str(hashtag).strip()
+
+        if not clean:
+            continue
+
+        if not clean.startswith("#"):
+            clean = f"#{clean}"
+
+        if clean.lower() not in [
+            existing.lower()
+            for existing in current
+        ]:
+            current.append(clean)
+
+    library = HASHTAG_LIBRARY.get(
+        category,
+        HASHTAG_LIBRARY["default"]
+    )
+
+    recommended = [
+        tag
+        for tag in library
+        if tag.lower()
+        not in [item.lower() for item in current]
+    ][:6]
+
+    keyword_hashtags = []
+
+    for keyword in keywords or []:
+
+        clean_keyword = re.sub(
+            r"[^A-Za-z0-9_]",
+            "",
+            str(keyword)
+        )
+
+        if clean_keyword:
+
+            hashtag = f"#{clean_keyword}"
+
+            if hashtag.lower() not in [
+                item.lower()
+                for item in current + recommended
+            ]:
+                keyword_hashtags.append(hashtag)
+
+    recommended = (
+        keyword_hashtags[:3]
+        + recommended
+    )[:6]
+
     if len(current) == 0:
-        reason = "You currently have no hashtags. Adding 5–6 relevant ones will significantly improve discoverability."
+
+        reason = (
+            "No hashtags were detected. Add a small set of highly relevant "
+            "hashtags based on the actual topic instead of using unrelated tags."
+        )
+
     elif len(current) < 4:
-        reason = f"You only used {len(current)} hashtag(s). Adding a few more relevant ones will help reach."
+
+        reason = (
+            f"You currently use {len(current)} hashtag(s). "
+            "Consider adding a few more topic-specific hashtags."
+        )
+
+    else:
+
+        reason = (
+            f"You currently use {len(current)} hashtags. "
+            "Focus on relevance rather than simply increasing the count."
+        )
 
     return {
         "current": current,
         "recommended": recommended,
         "reason": reason,
-        "expected_boost": "+15% to +20%"
     }
 
 
-def analyze_posting_time(current_time: str, platform: str = "instagram") -> Dict[str, Any]:
-    platform = (platform or "instagram").lower()
-    optimal = OPTIMAL_POSTING_TIMES.get(platform, OPTIMAL_POSTING_TIMES["default"])
+# ============================================================
+# POSTING TIME ANALYSIS
+# ============================================================
 
-    performance = "Below Average"
-    hour_str = (current_time or "").split(":")[0] if current_time else ""
-    try:
-        hour = int(hour_str)
-        if 18 <= hour <= 21:
-            performance = "Good"
-        elif 8 <= hour <= 10:
-            performance = "Average"
-    except:
-        pass
+def analyze_posting_time(
+    current_time: Any,
+    platform: str = "instagram"
+) -> Dict[str, Any]:
+
+    platform_key = str(
+        platform or "instagram"
+    ).lower().strip()
+
+    optimal = OPTIMAL_POSTING_TIMES.get(
+        platform_key,
+        OPTIMAL_POSTING_TIMES["default"]
+    )
+
+    hour = _parse_hour(current_time)
+
+    if hour is None:
+
+        performance = "Unknown"
+
+    elif hour in optimal["hours"]:
+
+        performance = "Good"
+
+    else:
+
+        performance = "Outside Suggested Window"
 
     return {
-        "current_time": current_time or "Not specified",
+        "current_time": (
+            str(current_time)
+            if current_time is not None
+            else "Not specified"
+        ),
+        "current_hour": hour,
         "performance": performance,
         "recommended_window": optimal["best_window"],
         "reason": optimal["reason"],
-        "expected_boost": optimal["expected_boost"]
     }
 
 
-def analyze_engagement(likes: int, comments: int, shares: int, saves: int) -> Dict[str, Any]:
-    def status(val, low, mid):
-        if val <= low: return "Very Low"
-        if val <= mid: return "Low"
-        return "Okay"
+# ============================================================
+# ENGAGEMENT ANALYSIS (POST-PUBLISH ONLY -- OPTIONAL)
+# ============================================================
+# Call this only when you actually have real engagement numbers for an
+# already-published post (e.g. a future "check my live post" endpoint).
+# The pre-publish prediction flow does not call this at all.
+
+def analyze_engagement(
+    likes: int,
+    comments: int,
+    shares: int,
+    saves: int,
+    follower_count: int = 0,
+    reach: int = 0,
+    impressions: int = 0,
+) -> Dict[str, Any]:
+
+    likes = _safe_int(likes)
+    comments = _safe_int(comments)
+    shares = _safe_int(shares)
+    saves = _safe_int(saves)
+    follower_count = _safe_int(follower_count)
+    reach = _safe_int(reach)
+    impressions = _safe_int(impressions)
+
+    if follower_count > 0:
+
+        like_rate = (likes / follower_count) * 100
+        comment_rate = (comments / follower_count) * 100
+        share_rate = (shares / follower_count) * 100
+        save_rate = (saves / follower_count) * 100
+        reach_rate = (reach / follower_count) * 100
+
+    else:
+
+        like_rate = 0.0
+        comment_rate = 0.0
+        share_rate = 0.0
+        save_rate = 0.0
+        reach_rate = 0.0
+
+    if reach > 0:
+        impressions_per_reached_user = impressions / reach
+    else:
+        impressions_per_reached_user = 0.0
+
+    if reach > 0:
+
+        reach_like_rate = (likes / reach) * 100
+        reach_comment_rate = (comments / reach) * 100
+        reach_share_rate = (shares / reach) * 100
+        reach_save_rate = (saves / reach) * 100
+
+    else:
+
+        reach_like_rate = 0.0
+        reach_comment_rate = 0.0
+        reach_share_rate = 0.0
+        reach_save_rate = 0.0
+
+    total_engagement = (
+        likes
+        + comments
+        + shares
+        + saves
+    )
+
+    if reach > 0:
+
+        engagement_rate = (
+            total_engagement / reach
+        ) * 100
+
+    elif impressions > 0:
+
+        engagement_rate = (
+            total_engagement / impressions
+        ) * 100
+
+    else:
+
+        engagement_rate = 0.0
+
+    def rate_status(rate: float) -> str:
+
+        if rate <= 0:
+            return "No Data"
+
+        if rate < 1:
+            return "Low"
+
+        if rate < 3:
+            return "Moderate"
+
+        if rate < 7:
+            return "Strong"
+
+        return "Very Strong"
+
+    actions = []
+
+    if follower_count <= 0:
+        actions.append(
+            "Add your follower count so engagement can be evaluated relative to audience size."
+        )
+
+    if reach <= 0:
+        actions.append(
+            "Reach data is zero or unavailable, so reach-based engagement cannot yet be evaluated."
+        )
+
+    elif follower_count > 0 and reach_rate < 20:
+        actions.append(
+            "Reach is relatively low compared with the follower base. "
+            "Improve the opening hook and distribution strategy."
+        )
+
+    if likes == 0:
+        actions.append(
+            "No likes were recorded yet. Strengthen the initial hook and share the post with relevant viewers."
+        )
+
+    elif follower_count > 0 and like_rate < 1:
+        actions.append(
+            "Like activity is relatively low compared with the follower base. "
+            "Make the post more immediately relevant to the target audience."
+        )
+
+    if comments == 0:
+        actions.append(
+            "No comments were recorded yet. Add a specific question or opinion prompt."
+        )
+
+    elif likes > 0 and comments / likes < 0.02:
+        actions.append(
+            "Comments are low relative to likes. Use a direct question to encourage conversation."
+        )
+
+    if shares == 0:
+        actions.append(
+            "No shares were recorded yet. Add a useful, practical, surprising, or emotionally relevant takeaway."
+        )
+
+    elif likes > 0 and shares / likes < 0.03:
+        actions.append(
+            "Shares are relatively low compared with likes. Make the content easier to recommend to someone else."
+        )
+
+    if saves == 0:
+        actions.append(
+            "No saves were recorded yet. Consider adding a checklist, tip, tutorial, or reference-worthy information."
+        )
+
+    elif likes > 0 and saves / likes < 0.05:
+        actions.append(
+            "Saves are relatively low compared with likes. Add more reusable or reference-worthy information."
+        )
+
+    if impressions > 0 and reach > 0:
+
+        if impressions_per_reached_user < 1.0:
+
+            actions.append(
+                "Impressions are not higher than reach. Check whether the impression data is being captured consistently."
+            )
+
+        elif impressions_per_reached_user > 3:
+
+            actions.append(
+                "The post is receiving repeated exposure among reached users. "
+                "Focus on converting exposure into stronger interactions."
+            )
+
+    if not actions:
+
+        actions.append(
+            "The supplied engagement signals look reasonably healthy. "
+            "Continue testing the caption, timing, and content format."
+        )
 
     return {
+        "followers": follower_count,
+        "reach": reach,
+        "impressions": impressions,
         "likes": {
             "value": likes,
-            "status": status(likes, 50, 150),
-            "note": f"You currently have {likes} likes. Early likes are extremely important for reach."
+            "rate_vs_followers": round(like_rate, 4),
+            "rate_vs_reach": round(reach_like_rate, 4),
+            "status": rate_status(like_rate),
         },
         "comments": {
             "value": comments,
-            "status": status(comments, 5, 15),
-            "note": f"{comments} comments so far. A good question usually increases this number."
+            "rate_vs_followers": round(comment_rate, 4),
+            "rate_vs_reach": round(reach_comment_rate, 4),
+            "status": rate_status(comment_rate),
         },
         "shares": {
             "value": shares,
-            "status": "Very Low" if shares == 0 else "Low",
-            "note": "No shares yet. Content that feels useful or emotional gets shared more."
+            "rate_vs_followers": round(share_rate, 4),
+            "rate_vs_reach": round(reach_share_rate, 4),
+            "status": rate_status(share_rate),
         },
         "saves": {
             "value": saves,
-            "status": "Very Low" if saves == 0 else "Low",
-            "note": "No saves yet. People save posts that contain tips, quotes, or useful information."
+            "rate_vs_followers": round(save_rate, 4),
+            "rate_vs_reach": round(reach_save_rate, 4),
+            "status": rate_status(save_rate),
         },
-        "recommended_actions": [
-            "Share the post to your Instagram Story immediately after publishing",
-            "Send it to your Close Friends list",
-            "Reply to every comment in the first hour",
-            "Pin a thoughtful question as your first comment",
-            "Ask a clear question in the caption itself",
-            "Make the post feel useful or emotionally resonant so people want to share it",
-            "Add something people would want to save (a tip, quote, or checklist)"
-        ],
-        "expected_improvement": "+18% to +25%"
+        "reach_rate": round(reach_rate, 4),
+        "engagement_rate": round(engagement_rate, 4),
+        "impressions_per_reached_user": round(
+            impressions_per_reached_user,
+            4
+        ),
+        "total_engagement": total_engagement,
+        "recommended_actions": actions,
     }
 
+
+# ============================================================
+# AI REASONING
+# ============================================================
 
 def generate_ai_reasoning(
     caption: str,
@@ -311,176 +930,591 @@ def generate_ai_reasoning(
     hashtag_count: int,
     posting_time: Dict,
     platform: str,
-    caption_analysis: Dict
+    caption_analysis: Dict,
+    engagement_analysis: Optional[Dict] = None,
 ) -> str:
+
     parts = []
 
-    # Opening based on category
-    if category == "professional":
-        parts.append("Your image gives a clean, professional first impression — that is a real strength for career and business content.")
-    else:
-        parts.append("Your post has a clear visual focus.")
+    parts.append(
+        f"The current ML virality probability is approximately "
+        f"{virality_score:.1f}% based on the caption, category, timing, "
+        f"and follower signals supplied before publishing."
+    )
 
-    # Caption feedback
-    if caption_analysis["word_count"] < 15:
-        parts.append(f"The caption is quite short ({caption_analysis['word_count']} words) and mostly describes what is in the photo.")
-    if not caption_analysis["has_question"]:
-        parts.append("There is no question, so people have less reason to leave a comment.")
-    if not caption_analysis["has_cta"]:
-        parts.append("There is also no clear invitation to engage (tag, share, or reply).")
+    parts.append(
+        f"The content is currently classified as {category}."
+    )
 
-    # Hashtags
-    if hashtag_count == 0:
-        parts.append("You have not added any hashtags yet.")
-    elif hashtag_count < 4:
-        parts.append(f"You only used {hashtag_count} hashtag(s), which limits how many new people can discover the post.")
+    if caption_analysis["word_count"] == 0:
 
-    # Timing
-    if posting_time["performance"] in ["Below Average", "Very Low"]:
         parts.append(
-            f"Posting at {posting_time['current_time']} is not the strongest window for {platform}. "
-            f"The better window is usually {posting_time['recommended_window']}."
+            "The caption is empty, so there is very little textual context for the audience."
         )
 
-    # Closing recommendation
-    parts.append(
-        f"If you rewrite the caption to include a short personal line + a question + a clear call-to-action, "
-        f"add 5–6 relevant hashtags, and post in the recommended time window, "
-        f"the predicted virality can realistically move from {virality_score:.0f}% toward 55–60%, "
-        f"and the overall content score from {content_score:.0f} into the mid-50s."
-    )
+    elif caption_analysis["current_score"] < 60:
+
+        parts.append(
+            f"The caption score is {caption_analysis['current_score']}/100. "
+            "It has several opportunities for improvement."
+        )
+
+    else:
+
+        parts.append(
+            f"The caption score is {caption_analysis['current_score']}/100, "
+            "which indicates reasonably usable caption structure."
+        )
+
+    if not caption_analysis["has_question"]:
+
+        parts.append(
+            "Adding a specific question could create a clearer reason for people to comment."
+        )
+
+    if not caption_analysis["has_cta"]:
+
+        parts.append(
+            "A clear call-to-action is currently missing."
+        )
+
+    if hashtag_count == 0:
+
+        parts.append(
+            "No hashtags were detected, so topic-specific discovery opportunities are limited."
+        )
+
+    elif hashtag_count < 4:
+
+        parts.append(
+            f"Only {hashtag_count} hashtag(s) were detected; relevance is more important than simply increasing the count."
+        )
+
+    if posting_time["performance"] == "Outside Suggested Window":
+
+        parts.append(
+            f"The selected posting time is outside the suggested "
+            f"{platform} window of {posting_time['recommended_window']}."
+        )
+
+    # Only mention engagement if real post-publish data was actually supplied.
+    if engagement_analysis is not None:
+
+        engagement_rate = engagement_analysis["engagement_rate"]
+        reach_rate = engagement_analysis["reach_rate"]
+
+        if engagement_analysis["followers"] > 0:
+
+            parts.append(
+                f"Reach currently represents {reach_rate:.1f}% of the supplied follower count."
+            )
+
+        if engagement_rate > 0:
+
+            parts.append(
+                f"The supplied engagement signals produce an engagement rate of "
+                f"{engagement_rate:.2f}% relative to the available reach/impression data."
+            )
+
+        if engagement_analysis["shares"]["value"] == 0:
+
+            parts.append(
+                "No shares are currently recorded, so shareability is an important improvement area."
+            )
+
+        if engagement_analysis["saves"]["value"] == 0:
+
+            parts.append(
+                "No saves are currently recorded, so adding reference-worthy information could help."
+            )
 
     return " ".join(parts)
 
+
+# ============================================================
+# TOP IMPROVEMENTS
+# ============================================================
 
 def generate_top_improvements(
     caption_analysis: Dict,
     hashtag_analysis: Dict,
     posting_time: Dict,
-    category: str
+    category: str,
+    engagement_analysis: Optional[Dict] = None,
 ) -> List[Dict[str, Any]]:
+
     improvements = []
 
-    # 1. Caption
-    improvements.append({
-        "rank": 1,
-        "title": "Rewrite the Caption",
-        "why": "Your current caption does not invite interaction. Adding a short story + question + CTA is the highest-leverage change.",
-        "how": "Use the improved caption generated in the Caption Analysis section, or write your own version with a question.",
-        "impact": "+15% to +20%",
-        "difficulty": "Easy",
-        "time_required": "2–3 minutes",
-        "stars": 5
-    })
+    rank = 1
 
-    # 2. Early engagement
-    improvements.append({
-        "rank": 2,
-        "title": "Push Early Engagement",
-        "why": "The first 45–60 minutes decide how far Instagram will push the post.",
-        "how": "Share to Story → Send to Close Friends → Reply to every comment quickly → Pin a question.",
-        "impact": "+10% to +15%",
-        "difficulty": "Easy",
-        "time_required": "First hour after posting",
-        "stars": 5
-    })
+    if caption_analysis["current_score"] < 75:
 
-    # 3. Hashtags
-    improvements.append({
-        "rank": 3,
-        "title": "Add Relevant Hashtags",
-        "why": f"Your post fits the {category} category. Matching hashtags help the right audience find it.",
-        "how": f"Add these: {', '.join(hashtag_analysis['recommended'][:5])}",
-        "impact": "+12% to +18%",
-        "difficulty": "Easy",
-        "time_required": "1 minute",
-        "stars": 5
-    })
+        improvements.append(
+            {
+                "rank": rank,
+                "title": "Improve the Caption",
+                "why": (
+                    f"Current caption score is "
+                    f"{caption_analysis['current_score']}/100."
+                ),
+                "how": (
+                    "Add context, a stronger opening, a specific question, "
+                    "and a relevant call-to-action."
+                ),
+                "difficulty": "Easy",
+                "time_required": "2–3 minutes",
+                "stars": 5,
+            }
+        )
 
-    # 4. Timing
-    if posting_time["performance"] != "Good":
-        improvements.append({
-            "rank": 4,
-            "title": "Post at a Better Time",
-            "why": posting_time["reason"],
-            "how": f"Schedule or post between {posting_time['recommended_window']}.",
-            "impact": posting_time["expected_boost"],
-            "difficulty": "Easy",
-            "time_required": "Just choose a different time",
-            "stars": 4
-        })
+        rank += 1
 
-    # 5. Format
-    improvements.append({
-        "rank": 5,
-        "title": "Consider a Different Format",
-        "why": "Static images currently receive less algorithmic distribution than Reels or carousels.",
-        "how": "If the content allows, turn it into a short Reel or a simple 2–3 slide carousel.",
-        "impact": "+15% to +25%",
-        "difficulty": "Medium",
-        "time_required": "Depends on the content",
-        "stars": 4
-    })
+    if len(hashtag_analysis["current"]) < 4:
 
-    return improvements
+        improvements.append(
+            {
+                "rank": rank,
+                "title": "Improve Hashtag Relevance",
+                "why": (
+                    "The current post has relatively few detected hashtags."
+                ),
+                "how": (
+                    "Use a small group of hashtags directly related to "
+                    f"the {category} topic."
+                ),
+                "difficulty": "Easy",
+                "time_required": "1 minute",
+                "stars": 4,
+            }
+        )
 
+        rank += 1
+
+    if posting_time["performance"] == "Outside Suggested Window":
+
+        improvements.append(
+            {
+                "rank": rank,
+                "title": "Test a Better Posting Window",
+                "why": posting_time["reason"],
+                "how": (
+                    f"Test posting between "
+                    f"{posting_time['recommended_window']}."
+                ),
+                "difficulty": "Easy",
+                "time_required": "1 minute",
+                "stars": 4,
+            }
+        )
+
+        rank += 1
+
+    # Only include engagement-driven improvements if real post-publish
+    # data was actually supplied.
+    if engagement_analysis is not None:
+
+        if engagement_analysis["shares"]["value"] == 0:
+
+            improvements.append(
+                {
+                    "rank": rank,
+                    "title": "Improve Shareability",
+                    "why": "No shares are currently recorded.",
+                    "how": (
+                        "Add a useful, surprising, practical, or emotionally "
+                        "relevant takeaway that people can send to others."
+                    ),
+                    "difficulty": "Medium",
+                    "time_required": "5–10 minutes",
+                    "stars": 5,
+                }
+            )
+
+            rank += 1
+
+        if engagement_analysis["saves"]["value"] == 0:
+
+            improvements.append(
+                {
+                    "rank": rank,
+                    "title": "Create a Save-Worthy Takeaway",
+                    "why": "No saves are currently recorded.",
+                    "how": (
+                        "Include a checklist, tip, tutorial, framework, "
+                        "or useful reference."
+                    ),
+                    "difficulty": "Medium",
+                    "time_required": "5–10 minutes",
+                    "stars": 4,
+                }
+            )
+
+            rank += 1
+
+        if engagement_analysis["reach_rate"] < 20:
+
+            improvements.append(
+                {
+                    "rank": rank,
+                    "title": "Improve Initial Distribution",
+                    "why": (
+                        "The supplied reach is relatively low compared with "
+                        "the follower count."
+                    ),
+                    "how": (
+                        "Strengthen the first line, use a clearer topic, "
+                        "and distribute the post to relevant existing audiences."
+                    ),
+                    "difficulty": "Medium",
+                    "time_required": "10–15 minutes",
+                    "stars": 4,
+                }
+            )
+            rank += 1
+
+    if not improvements:
+
+        improvements.append(
+            {
+                "rank": 1,
+                "title": "Continue Testing",
+                "why": (
+                    "The supplied signals do not show a major weakness."
+                ),
+                "how": (
+                    "Continue testing variations in caption, timing, "
+                    "hashtags, and content format."
+                ),
+                "difficulty": "Easy",
+                "time_required": "Ongoing",
+                "stars": 4,
+            }
+        )
+
+    return improvements[:5]
+
+
+# ============================================================
+# FINAL ACTION PLAN
+# ============================================================
 
 def generate_final_action_plan(
     hashtag_analysis: Dict,
     posting_time: Dict,
-    virality: float
+    virality: float,
+    engagement_analysis: Optional[Dict] = None,
 ) -> Dict[str, Any]:
+
+    today = []
+
+    today.append(
+        "Review the caption and add a specific interaction prompt if appropriate."
+    )
+
+    if hashtag_analysis["recommended"]:
+
+        today.append(
+            "Use only relevant hashtags: "
+            + ", ".join(
+                hashtag_analysis["recommended"][:5]
+            )
+        )
+
+    if posting_time["performance"] == "Outside Suggested Window":
+
+        today.append(
+            f"Test a posting time inside "
+            f"{posting_time['recommended_window']}."
+        )
+
+    # Only add engagement-driven action items if real post-publish data
+    # was actually supplied -- otherwise these would be recommending
+    # fixes for numbers that are simply zero because the post hasn't
+    # been published yet.
+    if engagement_analysis is not None:
+
+        if engagement_analysis["shares"]["value"] == 0:
+
+            today.append(
+                "Improve shareability with a useful or emotionally relevant takeaway."
+            )
+
+        if engagement_analysis["saves"]["value"] == 0:
+
+            today.append(
+                "Add information people may want to save for later."
+            )
+
+        if engagement_analysis["comments"]["value"] == 0:
+
+            today.append(
+                "Add a specific question that is easy for the target audience to answer."
+            )
+
+        if engagement_analysis["reach_rate"] < 20:
+
+            today.append(
+                "Work on stronger initial distribution because reach is low relative to the supplied follower count."
+            )
+
     return {
-        "today": [
-            "Rewrite the caption (add a short personal line + a question + a clear CTA)",
-            f"Add these hashtags: {', '.join(hashtag_analysis['recommended'][:5])}",
-            f"Post between {posting_time['recommended_window']}",
-            "Share to your Story immediately after publishing",
-            "Reply to every comment in the first hour"
-        ],
-        "expected_results": {
-            "engagement": "+15% to +22%",
-            "reach": "+12% to +20%",
-            "comments": "+15% to +25%",
-            "shares": "+10%+",
-            "virality_from": f"{virality:.0f}%",
-            "virality_to": "55–60%"
-        }
+        "today": today,
+        "based_on_current_prediction": f"{virality:.1f}%",
+        "note": (
+            "These actions are recommendations based on the supplied inputs. "
+            "They are not guaranteed percentage improvements."
+        ),
     }
 
 
-def generate_explainable_ai() -> List[Dict[str, Any]]:
-    return [
-        {"name": "Early Likes & Comments", "influence": 35, "description": "Strong activity in the first hour is the biggest signal for further distribution."},
-        {"name": "Saves", "influence": 20, "description": "Saves tell the algorithm the content has lasting value."},
-        {"name": "Caption Quality", "influence": 18, "description": "Captions that ask questions and invite replies increase comments and watch time."},
-        {"name": "Posting Time", "influence": 12, "description": "Posting when your audience is active gives a stronger initial push."},
-        {"name": "Hashtags", "influence": 8, "description": "Relevant hashtags help new people discover the post."},
-        {"name": "Media Format", "influence": 7, "description": "Reels and carousels currently get more distribution than static images."}
-    ]
+# ============================================================
+# EXPLAINABLE AI
+# ============================================================
 
+def generate_explainable_ai(
+    caption_analysis: Optional[Dict[str, Any]] = None,
+    posting_time: Optional[Dict[str, Any]] = None,
+    hashtag_count: int = 0,
+    engagement_analysis: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+
+    factors = []
+
+    caption_analysis = caption_analysis or {}
+    posting_time = posting_time or {}
+
+    caption_score = _safe_float(
+        caption_analysis.get("current_score")
+    )
+
+    # These are NOT claimed as trained-model SHAP feature importance --
+    # that lives in config/shap_top_features.json from train_pipeline.py.
+    # These are recommendation-engine observations about the input.
+    factors.append(
+        {
+            "name": "ML Virality Probability",
+            "influence": None,
+            "description": (
+                "Primary prediction comes from the trained ML model, based "
+                "on caption text, sentiment, category, timing, and follower count."
+            ),
+        }
+    )
+
+    factors.append(
+        {
+            "name": "Caption Quality",
+            "influence": None,
+            "description": (
+                f"Caption structure score is {caption_score:.0f}/100."
+            ),
+        }
+    )
+
+    factors.append(
+        {
+            "name": "Posting Time",
+            "influence": None,
+            "description": (
+                f"Current timing status: "
+                f"{posting_time.get('performance', 'Unknown')}."
+            ),
+        }
+    )
+
+    factors.append(
+        {
+            "name": "Hashtags",
+            "influence": None,
+            "description": (
+                f"{hashtag_count} hashtag(s) detected in the submitted input."
+            ),
+        }
+    )
+
+    # Only include engagement-derived factors if real post-publish data
+    # was actually supplied.
+    if engagement_analysis is not None:
+
+        engagement_rate = _safe_float(
+            engagement_analysis.get("engagement_rate")
+        )
+
+        reach_rate = _safe_float(
+            engagement_analysis.get("reach_rate")
+        )
+
+        factors.append(
+            {
+                "name": "Engagement Signals",
+                "influence": None,
+                "description": (
+                    f"Likes, comments, shares and saves are currently "
+                    f"{engagement_analysis.get('total_engagement', 0)} in total."
+                ),
+            }
+        )
+
+        factors.append(
+            {
+                "name": "Audience Reach",
+                "influence": None,
+                "description": (
+                    f"Reach is {engagement_analysis.get('reach', 0)} "
+                    f"against {engagement_analysis.get('followers', 0)} followers."
+                ),
+            }
+        )
+
+        if engagement_rate > 0:
+
+            factors.append(
+                {
+                    "name": "Engagement Rate",
+                    "influence": None,
+                    "description": (
+                        f"Calculated engagement rate: {engagement_rate:.2f}%."
+                    ),
+                }
+            )
+
+        if reach_rate > 0:
+
+            factors.append(
+                {
+                    "name": "Reach Rate",
+                    "influence": None,
+                    "description": (
+                        f"Reach represents {reach_rate:.2f}% of the supplied follower count."
+                    ),
+                }
+            )
+
+    return factors
+
+
+# ============================================================
+# MAIN RECOMMENDATION BUILDER
+# ============================================================
 
 def build_full_recommendation(
     caption: str,
     platform: str = "instagram",
-    current_hashtags: List[str] = None,
-    post_time: str = "8:13",
-    likes: int = 56,
-    comments: int = 5,
-    shares: int = 0,
-    saves: int = 0,
-    virality_score: float = 46.0,
-    content_score: float = 37.3,
-    image_analysis: Optional[Dict] = None
+    current_hashtags: Optional[List[str]] = None,
+    keywords: Optional[List[str]] = None,
+    post_time: Any = None,
+    follower_count: int = 0,
+    media_type: str = "image",
+    content_category: str = "",
+    virality_score: float = 0.0,
+    content_score: float = 0.0,
+    image_analysis: Optional[Dict] = None,
+    # Post-publish engagement data -- OPTIONAL. Leave as None for the
+    # normal pre-publish prediction flow. Only pass real numbers if you
+    # have them (e.g. a future "check my live post" endpoint).
+    likes: Optional[int] = None,
+    comments: Optional[int] = None,
+    shares: Optional[int] = None,
+    saves: Optional[int] = None,
+    reach: Optional[int] = None,
+    impressions: Optional[int] = None,
 ) -> Dict[str, Any]:
 
-    current_hashtags = current_hashtags or []
-    category = detect_content_category(caption, current_hashtags)
-    caption_analysis = analyze_caption(caption)
-    ai_caption = generate_ai_caption(caption, category, caption_analysis["problems"])
-    hashtag_analysis = get_suggested_hashtags(category, current_hashtags)
-    posting_time = analyze_posting_time(post_time, platform)
-    engagement = analyze_engagement(likes, comments, shares, saves)
+    current_hashtags = _normalise_text_list(
+        current_hashtags
+    )
+
+    keywords = _normalise_text_list(
+        keywords
+    )
+
+    caption = str(caption or "").strip()
+
+    platform = str(
+        platform or "instagram"
+    )
+
+    media_type = str(
+        media_type or "image"
+    )
+
+    # --------------------------------------------------------
+    # Category
+    # --------------------------------------------------------
+
+    detected_category = detect_content_category(
+        caption,
+        keywords
+    )
+
+    category = (
+        str(content_category).strip().lower()
+        if content_category
+        else detected_category
+    )
+
+    if category not in HASHTAG_LIBRARY:
+
+        category = detected_category
+
+    # --------------------------------------------------------
+    # Caption
+    # --------------------------------------------------------
+
+    caption_analysis = analyze_caption(
+        caption
+    )
+
+    ai_caption = generate_ai_caption(
+        caption,
+        category,
+        caption_analysis["problems"]
+    )
+
+    # --------------------------------------------------------
+    # Hashtags
+    # --------------------------------------------------------
+
+    hashtag_analysis = get_suggested_hashtags(
+        category=category,
+        current_hashtags=current_hashtags,
+        keywords=keywords,
+    )
+
+    # --------------------------------------------------------
+    # Time
+    # --------------------------------------------------------
+
+    posting_time = analyze_posting_time(
+        post_time,
+        platform
+    )
+
+    # --------------------------------------------------------
+    # Engagement (only if real post-publish numbers were supplied)
+    # --------------------------------------------------------
+
+    have_engagement_data = any(
+        v is not None for v in (likes, comments, shares, saves, reach, impressions)
+    )
+
+    engagement = (
+        analyze_engagement(
+            likes=likes or 0,
+            comments=comments or 0,
+            shares=shares or 0,
+            saves=saves or 0,
+            follower_count=follower_count,
+            reach=reach or 0,
+            impressions=impressions or 0,
+        )
+        if have_engagement_data
+        else None
+    )
+
+    # --------------------------------------------------------
+    # Reasoning
+    # --------------------------------------------------------
 
     ai_reasoning = generate_ai_reasoning(
         caption=caption,
@@ -490,72 +1524,446 @@ def build_full_recommendation(
         hashtag_count=len(current_hashtags),
         posting_time=posting_time,
         platform=platform,
-        caption_analysis=caption_analysis
+        caption_analysis=caption_analysis,
+        engagement_analysis=engagement,
     )
+
+    # --------------------------------------------------------
+    # Improvements
+    # --------------------------------------------------------
 
     top_improvements = generate_top_improvements(
-        caption_analysis, hashtag_analysis, posting_time, category
+        caption_analysis=caption_analysis,
+        hashtag_analysis=hashtag_analysis,
+        posting_time=posting_time,
+        category=category,
+        engagement_analysis=engagement,
     )
+
+    # --------------------------------------------------------
+    # Action plan
+    # --------------------------------------------------------
 
     action_plan = generate_final_action_plan(
-        hashtag_analysis, posting_time, virality_score
+        hashtag_analysis=hashtag_analysis,
+        posting_time=posting_time,
+        virality=virality_score,
+        engagement_analysis=engagement,
     )
 
-    # Dynamic strengths
-    strengths = []
-    if category == "professional":
-        strengths.append("Clean professional visual that builds trust")
-    if caption_analysis["word_count"] >= 10:
-        strengths.append("Caption is on-topic and readable")
-    if any(w in (caption or "").lower() for w in ["ready", "professional", "growth", "career"]):
-        strengths.append("Positive and forward-looking tone")
-    if not strengths:
-        strengths.append("Clear subject in the image")
+    # --------------------------------------------------------
+    # Strengths
+    # --------------------------------------------------------
 
-    # Dynamic weaknesses (built only from actual problems)
-    weaknesses = list(caption_analysis["problems"])
+    strengths = []
+
+    if caption_analysis["current_score"] >= 75:
+
+        strengths.append(
+            "Caption has a reasonably strong structure."
+        )
+
+    if caption_analysis["has_question"]:
+
+        strengths.append(
+            "Caption includes a question that can encourage discussion."
+        )
+
+    if caption_analysis["has_cta"]:
+
+        strengths.append(
+            "Caption contains a call-to-action."
+        )
+
+    if len(current_hashtags) >= 4:
+
+        strengths.append(
+            "Multiple hashtags were provided for topic discovery."
+        )
+
+    if posting_time["performance"] == "Good":
+
+        strengths.append(
+            "The selected posting time is inside the suggested platform window."
+        )
+
+    if engagement is not None:
+
+        if engagement["reach_rate"] >= 50:
+
+            strengths.append(
+                "Reach is relatively strong compared with the supplied follower count."
+            )
+
+        if engagement["shares"]["value"] > 0:
+
+            strengths.append(
+                "The post has recorded share activity."
+            )
+
+        if engagement["saves"]["value"] > 0:
+
+            strengths.append(
+                "The post has recorded save activity."
+            )
+
+    if not strengths:
+
+        strengths.append(
+            "The post has usable data for further optimization."
+        )
+
+    # --------------------------------------------------------
+    # Weaknesses
+    # --------------------------------------------------------
+
+    weaknesses = list(
+        caption_analysis["problems"]
+    )
+
     if len(current_hashtags) < 4:
-        weaknesses.append(f"Only {len(current_hashtags)} hashtag(s) used")
-    if posting_time["performance"] != "Good":
-        weaknesses.append(f"Posting time ({post_time}) is not ideal for {platform}")
-    if likes < 80:
-        weaknesses.append(f"Only {likes} likes so far — early engagement needs help")
-    if comments < 8:
-        weaknesses.append(f"Only {comments} comments — a question would help")
-    if shares == 0:
-        weaknesses.append("No shares yet")
-    if saves == 0:
-        weaknesses.append("No saves yet")
-    weaknesses.append("Static image format receives less distribution than Reels or carousels")
+
+        weaknesses.append(
+            f"Only {len(current_hashtags)} hashtag(s) detected."
+        )
+
+    if posting_time["performance"] == "Outside Suggested Window":
+
+        weaknesses.append(
+            f"Selected posting time ({posting_time['current_time']}) "
+            f"is outside the suggested {platform} window."
+        )
+
+    if engagement is not None:
+
+        if engagement["followers"] > 0 and engagement["reach_rate"] < 20:
+
+            weaknesses.append(
+                "Reach is relatively low compared with follower count."
+            )
+
+        if engagement["shares"]["value"] == 0:
+
+            weaknesses.append(
+                "No shares are currently recorded."
+            )
+
+        if engagement["saves"]["value"] == 0:
+
+            weaknesses.append(
+                "No saves are currently recorded."
+            )
+
+        if engagement["comments"]["value"] == 0:
+
+            weaknesses.append(
+                "No comments are currently recorded."
+            )
+
+    # --------------------------------------------------------
+    # Explainable AI
+    # --------------------------------------------------------
+
+    explainable_ai = generate_explainable_ai(
+        caption_analysis=caption_analysis,
+        posting_time=posting_time,
+        hashtag_count=len(current_hashtags),
+        engagement_analysis=engagement,
+    )
+
+    # --------------------------------------------------------
+    # Image analysis
+    # --------------------------------------------------------
+
+    final_image_analysis = image_analysis or {
+        "status": "No detailed image analysis provided",
+        "note": (
+            "The current prediction system primarily uses caption and "
+            "metadata features. No image-trained virality model is being claimed."
+        ),
+    }
+
+    # --------------------------------------------------------
+    # Final report
+    # --------------------------------------------------------
 
     return {
         "category": category,
+
+        "platform": platform,
+
+        "media_type": media_type,
+
+        "keywords": keywords,
+
         "ai_reasoning": ai_reasoning,
+
         "caption_analysis": {
             **caption_analysis,
-            **ai_caption
+            **ai_caption,
         },
+
         "suggested_hashtags": hashtag_analysis,
+
         "posting_time": posting_time,
-        "engagement_analysis": engagement,
-        "image_analysis": image_analysis or {
-            "brightness": "N/A",
-            "contrast": "N/A",
-            "sharpness": "N/A",
-            "faces": "No image provided",
-            "composition": "Unknown",
-            "color_harmony": "N/A",
-            "suggestions": ["Upload an image for detailed visual analysis"],
-            "expected_improvement": "+0%"
-        },
+
+        "engagement_analysis": engagement,  # None for the normal pre-publish flow
+
+        "image_analysis": final_image_analysis,
+
         "top_improvements": top_improvements,
+
         "ai_content_coach": {
-            "current_virality": f"{virality_score:.0f}%",
-            "projected_virality": "55–60%",
-            "message": ai_reasoning
+            "current_virality": f"{virality_score:.1f}%",
+            "message": (
+                "The virality value shown here comes from the existing "
+                "prediction model. Recommendations are based on the supplied inputs."
+            ),
         },
-        "explainable_ai": generate_explainable_ai(),
+
+        "explainable_ai": explainable_ai,
+
         "final_action_plan": action_plan,
+
         "strengths": strengths,
-        "weaknesses": weaknesses
+
+        "weaknesses": weaknesses,
     }
+
+
+# ============================================================
+# RECOMMENDATION ENGINE
+# ============================================================
+
+class RecommendationEngine:
+
+    """
+    Recommendation engine used by the FastAPI backend.
+
+    The existing trained ML model remains responsible for
+    virality prediction.
+
+    This engine uses the actual user input to create
+    personalized recommendations. Engagement metrics
+    (likes/comments/shares/saves/reach/impressions) are only
+    used if a caller explicitly supplies real post-publish data --
+    the normal pre-publish prediction flow never sends these,
+    so they are treated as "not available", not as zero.
+    """
+
+    def __init__(
+        self,
+        dataset_path: Optional[str] = None
+    ) -> None:
+
+        self.dataset_path = dataset_path
+
+    def generate_report(
+        self,
+        post_payload: Dict[str, Any],
+        prediction: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+
+        # ----------------------------------------------------
+        # Text
+        # ----------------------------------------------------
+
+        caption = str(
+            post_payload.get("caption") or ""
+        )
+
+        keywords = _normalise_text_list(
+            post_payload.get("keywords")
+        )
+
+        hashtags = _normalise_text_list(
+            post_payload.get("hashtags")
+        )
+
+        # ----------------------------------------------------
+        # Metadata
+        # ----------------------------------------------------
+
+        platform = str(
+            post_payload.get("platform")
+            or "Instagram"
+        )
+
+        media_type = str(
+            post_payload.get("media_type")
+            or "image"
+        )
+
+        content_category = str(
+            post_payload.get("content_category")
+            or ""
+        )
+
+        post_time = (
+            post_payload.get("post_time")
+            if post_payload.get("post_time") is not None
+            else post_payload.get("post_hour")
+        )
+
+        followers = _safe_int(
+            post_payload.get("follower_count")
+        )
+
+        # ----------------------------------------------------
+        # Post-publish engagement (optional).
+        # Use .get() with no default -- if the key is absent (as it will
+        # be for every request from the current /api/predict schema),
+        # these stay None, and build_full_recommendation correctly treats
+        # that as "no engagement data available" rather than "zero
+        # engagement".
+        # ----------------------------------------------------
+
+        def _optional_int(key: str) -> Optional[int]:
+            value = post_payload.get(key)
+            return None if value is None else _safe_int(value)
+
+        likes = _optional_int("early_likes")
+        comments = _optional_int("early_comments")
+        shares = _optional_int("early_shares")
+        saves = _optional_int("saves")
+        reach = _optional_int("reach")
+        impressions = _optional_int("impressions")
+
+        # ----------------------------------------------------
+        # ML prediction
+        # ----------------------------------------------------
+
+        virality_score = 0.0
+
+        if prediction:
+
+            virality_value = prediction.get(
+                "viral_probability",
+                prediction.get(
+                    "virality",
+                    prediction.get(
+                        "score",
+                        0.0
+                    ),
+                ),
+            )
+
+            if isinstance(
+                virality_value,
+                (int, float)
+            ):
+
+                value = float(
+                    virality_value
+                )
+
+                if 0.0 <= value <= 1.0:
+
+                    virality_score = value * 100
+
+                else:
+
+                    virality_score = value
+
+        # ----------------------------------------------------
+        # Content score
+        # ----------------------------------------------------
+
+        content_score = 0.0
+
+        if prediction:
+
+            content_score = _safe_float(
+                prediction.get(
+                    "content_score",
+                    0.0
+                )
+            )
+
+        # ----------------------------------------------------
+        # Image information
+        # ----------------------------------------------------
+
+        image_analysis = post_payload.get(
+            "image_analysis"
+        )
+
+        # ----------------------------------------------------
+        # Build report
+        # ----------------------------------------------------
+
+        report = build_full_recommendation(
+
+            caption=caption,
+
+            platform=platform,
+
+            current_hashtags=hashtags,
+
+            keywords=keywords,
+
+            post_time=post_time,
+
+            follower_count=followers,
+
+            media_type=media_type,
+
+            content_category=content_category,
+
+            virality_score=virality_score,
+
+            content_score=content_score,
+
+            image_analysis=image_analysis,
+
+            likes=likes,
+            comments=comments,
+            shares=shares,
+            saves=saves,
+            reach=reach,
+            impressions=impressions,
+        )
+
+        # ----------------------------------------------------
+        # Compatibility fields for existing frontend
+        # ----------------------------------------------------
+
+        report["priority_actions"] = (
+            report
+            .get("final_action_plan", {})
+            .get("today", [])
+        )
+
+        report["hashtag_analysis"] = (
+            report.get("suggested_hashtags", {})
+        )
+
+        report["action_plan"] = (
+            report
+            .get("final_action_plan", {})
+            .get("today", [])
+        )
+
+        report["top_factors"] = (
+            report.get("explainable_ai", [])
+        )
+
+        report["explainability"] = {
+
+            "top_factors": report.get(
+                "explainable_ai",
+                []
+            ),
+
+            "action_plan": report
+            .get("final_action_plan", {})
+            .get("today", []),
+
+            "hashtag_analysis": report.get(
+                "suggested_hashtags",
+                {}
+            ),
+
+        }
+
+        return report

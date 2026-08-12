@@ -22,37 +22,232 @@ export default function PredictionResult({
   // ---------------------------------------------------------
 
   const viralityScore = Number(p.viralityScore ?? 0);
+
   const confidence = Number(p.confidence ?? 0);
+
   const engagementProbability = Number(
     p.engagementProbability ?? 0
   );
 
+  // ---------------------------------------------------------
+  // REAL BACKEND RECOMMENDATION REPORT
+  // ---------------------------------------------------------
+
+  const recommendationReport =
+    p.recommendationReport ?? {};
+
+  const aiContentCoach =
+    recommendationReport.ai_content_coach ?? {};
+
+  const reportEngagement =
+    recommendationReport.engagement_analysis ?? {};
+
+  const reportPostingTime =
+    recommendationReport.posting_time ??
+    recommendationReport.posting_time_analysis ??
+    {};
+
+  const reportCaption =
+    recommendationReport.caption_analysis ?? {};
+
+  const reportHashtags =
+    recommendationReport.hashtag_analysis ??
+    recommendationReport.suggested_hashtags ??
+    {};
+
+  const reportExplainability =
+    recommendationReport.explainability ?? {};
+
+  const reportTopImprovements = Array.isArray(
+    recommendationReport.top_improvements
+  )
+    ? recommendationReport.top_improvements
+    : [];
+
+  const reportExplainableAI = Array.isArray(
+    recommendationReport.explainable_ai
+  )
+    ? recommendationReport.explainable_ai
+    : [];
+
+  // ---------------------------------------------------------
+  // AI CONTENT COACH
+  // ---------------------------------------------------------
+
+  const currentVirality =
+    typeof aiContentCoach?.current_virality === "string"
+      ? aiContentCoach.current_virality
+      : `${viralityScore.toFixed(1)}%`;
+
+  const aiCoachMessage =
+    typeof aiContentCoach?.message === "string"
+      ? aiContentCoach.message
+      : "Recommendations are based on the supplied inputs.";
+
+  // ---------------------------------------------------------
+  // REACH FORECAST
+  // ---------------------------------------------------------
+
   const reachForecast =
-    p.reachForecast ?? "Not available";
+    typeof p.reachForecast === "string"
+      ? p.reachForecast
+      : "Not available";
+
+  // ---------------------------------------------------------
+  // SAFE DISPLAY HELPERS
+  // ---------------------------------------------------------
+
+  const getDisplayText = (
+    value: any,
+    fallback = ""
+  ): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      return String(value);
+    }
+
+    if (!value || typeof value !== "object") {
+      return fallback;
+    }
+
+    if (typeof value.message === "string") {
+      return value.message;
+    }
+
+    if (typeof value.reason === "string") {
+      return value.reason;
+    }
+
+    if (typeof value.description === "string") {
+      return value.description;
+    }
+
+    if (typeof value.text === "string") {
+      return value.text;
+    }
+
+    if (typeof value.title === "string") {
+      return value.title;
+    }
+
+    return fallback;
+  };
 
   // ---------------------------------------------------------
   // SAFE ARRAYS
   // ---------------------------------------------------------
 
-  const explainableAI: string[] = Array.isArray(p.explainableAI)
-    ? p.explainableAI
-    : [];
+  const oldExplainableAI: string[] =
+    Array.isArray(p.explainableAI)
+      ? p.explainableAI
+          .map((item: any) =>
+            getDisplayText(item)
+          )
+          .filter(Boolean)
+      : [];
 
-  const hashtags: string[] = Array.isArray(
-    p.hashtagIntelligence
-  )
-    ? p.hashtagIntelligence
-    : [];
+  /*
+    The new backend explainable_ai can contain objects.
+    Convert every item into a safe string before rendering.
+  */
+  const safeExplainableAI: string[] =
+    reportExplainableAI
+      .map((item: any) => {
+        if (typeof item === "string") {
+          return item;
+        }
 
-  const hooks: string[] = Array.isArray(p.suggestedHooks)
-    ? p.suggestedHooks
-    : [];
+        if (item?.name && item?.reason) {
+          return `${item.name}: ${item.reason}`;
+        }
+
+        if (item?.title && item?.reason) {
+          return `${item.title}: ${item.reason}`;
+        }
+
+        if (item?.description) {
+          return item.description;
+        }
+
+        if (item?.reason) {
+          return item.reason;
+        }
+
+        if (item?.message) {
+          return item.message;
+        }
+
+        if (item?.text) {
+          return item.text;
+        }
+
+        return "";
+      })
+      .filter(Boolean);
+
+  /*
+    Use the new backend explainable AI first.
+    Fall back to the older prediction structure.
+  */
+  const explainableAI: string[] =
+    safeExplainableAI.length > 0
+      ? safeExplainableAI
+      : oldExplainableAI;
+
+  // ---------------------------------------------------------
+  // HASHTAGS
+  // ---------------------------------------------------------
+
+  const backendRecommendedHashtags =
+    Array.isArray(
+      reportHashtags?.recommended
+    )
+      ? reportHashtags.recommended
+      : [];
+
+  const oldHashtags: string[] =
+    Array.isArray(p.hashtagIntelligence)
+      ? p.hashtagIntelligence
+          .map((tag: any) =>
+            getDisplayText(tag)
+          )
+          .filter(Boolean)
+      : [];
+
+  const hashtags: string[] =
+    backendRecommendedHashtags.length > 0
+      ? backendRecommendedHashtags
+          .map((tag: any) =>
+            getDisplayText(tag)
+          )
+          .filter(Boolean)
+      : oldHashtags;
+
+  // ---------------------------------------------------------
+  // SUGGESTED HOOKS
+  // ---------------------------------------------------------
+
+  const hooks: string[] =
+    Array.isArray(p.suggestedHooks)
+      ? p.suggestedHooks
+          .map((hook: any) =>
+            getDisplayText(hook)
+          )
+          .filter(Boolean)
+      : [];
 
   // ---------------------------------------------------------
   // TEXTUAL FEATURES
   // ---------------------------------------------------------
 
-  const textualFeatures = p.textualFeatures ?? {};
+  const textualFeatures =
+    p.textualFeatures ?? {};
 
   const semanticKeywords = Array.isArray(
     textualFeatures.semanticKeywords
@@ -60,7 +255,8 @@ export default function PredictionResult({
     ? textualFeatures.semanticKeywords
     : [];
 
-  const sentiment = textualFeatures.sentiment ?? {};
+  const sentiment =
+    textualFeatures.sentiment ?? {};
 
   const sentimentLabel =
     sentiment.label ?? "Not available";
@@ -82,10 +278,31 @@ export default function PredictionResult({
   );
 
   // ---------------------------------------------------------
+  // CAPTION ANALYSIS FROM BACKEND
+  // ---------------------------------------------------------
+
+  const captionWordCount = Number(
+    reportCaption?.word_count ?? 0
+  );
+
+  const captionCharCount = Number(
+    reportCaption?.char_count ?? 0
+  );
+
+  const captionScore = Number(
+    reportCaption?.current_score ?? 0
+  );
+
+  const captionRecommendedLength =
+    reportCaption?.recommended_length ??
+    "18–30 words";
+
+  // ---------------------------------------------------------
   // VISUAL FEATURES
   // ---------------------------------------------------------
 
-  const visualFeatures = p.visualFeatures ?? {};
+  const visualFeatures =
+    p.visualFeatures ?? {};
 
   const dominantColors = Array.isArray(
     visualFeatures.dominantColors
@@ -100,13 +317,15 @@ export default function PredictionResult({
     : [];
 
   const clipEmbeddingDimension =
-    visualFeatures.clipEmbeddingDimension ?? "N/A";
+    visualFeatures.clipEmbeddingDimension ??
+    "N/A";
 
   // ---------------------------------------------------------
   // METADATA
   // ---------------------------------------------------------
 
-  const metadataFeatures = p.metadataFeatures ?? {};
+  const metadataFeatures =
+    p.metadataFeatures ?? {};
 
   const temporalStamp =
     metadataFeatures.temporalStamp ?? {};
@@ -128,100 +347,198 @@ export default function PredictionResult({
     pipelineBreakdown.ensembleModels ?? {};
 
   // ---------------------------------------------------------
-  // HELPER FUNCTIONS
+  // ENGAGEMENT HELPERS
   // ---------------------------------------------------------
 
-  const getScoreLabel = (score: number) => {
-    if (score >= 80) return "Excellent";
-    if (score >= 65) return "Strong";
-    if (score >= 50) return "Average";
-    if (score >= 35) return "Below Average";
-    return "Low Potential";
-  };
-
-  const getScoreClass = (score: number) => {
-    if (score >= 80) {
-      return "text-emerald-400";
+  /*
+    Backend engagement_analysis can return values as numbers
+    or nested objects. This helper safely extracts them.
+  */
+  const getEngagementValue = (
+    metric: any,
+    fallback = 0
+  ): number => {
+    if (
+      typeof metric === "number" &&
+      Number.isFinite(metric)
+    ) {
+      return metric;
     }
 
-    if (score >= 65) {
-      return "text-cyan-400";
+    if (
+      typeof metric === "string" &&
+      metric.trim() !== ""
+    ) {
+      const parsed = Number(metric);
+
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
     }
 
-    if (score >= 50) {
-      return "text-yellow-400";
+    if (metric && typeof metric === "object") {
+      const possibleValues = [
+        metric.current,
+        metric.value,
+        metric.count,
+        metric.total,
+        metric.number,
+        metric.amount,
+      ];
+
+      for (const value of possibleValues) {
+        if (
+          typeof value === "number" &&
+          Number.isFinite(value)
+        ) {
+          return value;
+        }
+
+        if (
+          typeof value === "string" &&
+          value.trim() !== ""
+        ) {
+          const parsed = Number(value);
+
+          if (!Number.isNaN(parsed)) {
+            return parsed;
+          }
+        }
+      }
     }
 
-    return "text-red-400";
+    return fallback;
   };
 
-  const getConfidenceLabel = (score: number) => {
-    if (score >= 90) return "Very High";
-    if (score >= 75) return "High";
-    if (score >= 60) return "Moderate";
-    return "Low";
-  };
+  // ---------------------------------------------------------
+  // REAL ENGAGEMENT DATA
+  // ---------------------------------------------------------
 
-  const getEngagementLabel = (score: number) => {
-    if (score >= 80) return "Very High";
-    if (score >= 65) return "High";
-    if (score >= 50) return "Moderate";
-    return "Low";
-  };
+  const followerCount = getEngagementValue(
+    reportEngagement?.followers ??
+      reportEngagement?.follower_count ??
+      p.metadataFeatures?.followerCount,
+    0
+  );
 
-  const formatNumber = (value: any) => {
-    const number = Number(value);
+  const reach = getEngagementValue(
+    reportEngagement?.reach,
+    0
+  );
 
-    if (Number.isNaN(number)) {
-      return "0";
-    }
+  const impressions = getEngagementValue(
+    reportEngagement?.impressions,
+    0
+  );
 
-    return number.toLocaleString();
-  };
+  const likes = getEngagementValue(
+    reportEngagement?.likes ??
+      reportEngagement?.early_likes ??
+      p.metadataFeatures?.earlyLikes,
+    0
+  );
+
+  const comments = getEngagementValue(
+    reportEngagement?.comments ??
+      reportEngagement?.early_comments ??
+      p.metadataFeatures?.earlyComments,
+    0
+  );
+
+  const shares = getEngagementValue(
+    reportEngagement?.shares ??
+      reportEngagement?.early_shares ??
+      p.metadataFeatures?.earlyShares,
+    0
+  );
+
+  const saves = getEngagementValue(
+    reportEngagement?.saves ??
+      p.metadataFeatures?.saves,
+    0
+  );
+
+  // ---------------------------------------------------------
+  // POSTING TIME FROM BACKEND
+  // ---------------------------------------------------------
+
+  const backendCurrentHour =
+    reportPostingTime?.current_hour ??
+    reportPostingTime?.current_time ??
+    temporalStamp.publishTimeUtc ??
+    "Not available";
+
+  const recommendedWindow =
+    reportPostingTime?.recommended_window ??
+    "Recommended publishing window";
+
+  const postingPerformance =
+    reportPostingTime?.performance ??
+    "Not available";
+
+  const postingReason =
+    reportPostingTime?.reason ??
+    "";
 
   // ---------------------------------------------------------
   // DYNAMIC STRENGTHS
   // ---------------------------------------------------------
 
-  const strengths: string[] = [];
+  const backendStrengths: string[] =
+    Array.isArray(recommendationReport?.strengths)
+      ? recommendationReport.strengths
+          .map((item: any) =>
+            getDisplayText(item)
+          )
+          .filter(Boolean)
+      : [];
 
-  if (viralityScore >= 65) {
-    strengths.push(
-      "Strong overall virality potential detected."
-    );
-  }
+  const strengths: string[] =
+    backendStrengths.length > 0
+      ? backendStrengths
+      : [];
 
-  if (engagementProbability >= 60) {
-    strengths.push(
-      "High predicted engagement probability."
-    );
-  }
+  if (strengths.length === 0) {
+    if (viralityScore >= 65) {
+      strengths.push(
+        "Strong overall virality potential detected."
+      );
+    }
 
-  if (confidence >= 80) {
-    strengths.push(
-      "Prediction model has high confidence in this result."
-    );
-  }
+    if (engagementProbability >= 60) {
+      strengths.push(
+        "High predicted engagement probability."
+      );
+    }
 
-  if (semanticKeywords.length > 0) {
-    strengths.push(
-      "Caption contains identifiable semantic keywords."
-    );
-  }
+    if (confidence >= 80) {
+      strengths.push(
+        "Prediction model has high confidence in this result."
+      );
+    }
 
-  if (detectedObjects.length > 0) {
-    strengths.push(
-      "Visual analysis detected meaningful focal elements."
-    );
-  }
+    if (semanticKeywords.length > 0) {
+      strengths.push(
+        "Caption contains identifiable semantic keywords."
+      );
+    }
 
-  if (
-    temporalStamp.optimalWindowScore &&
-    Number(temporalStamp.optimalWindowScore) >= 80
-  ) {
-    strengths.push(
-      "Selected publishing window is favorable."
-    );
+    if (detectedObjects.length > 0) {
+      strengths.push(
+        "Visual analysis detected meaningful focal elements."
+      );
+    }
+
+    if (
+      temporalStamp.optimalWindowScore &&
+      Number(
+        temporalStamp.optimalWindowScore
+      ) >= 80
+    ) {
+      strengths.push(
+        "Selected publishing window is favorable."
+      );
+    }
   }
 
   if (strengths.length === 0) {
@@ -234,42 +551,56 @@ export default function PredictionResult({
   // DYNAMIC WEAKNESSES
   // ---------------------------------------------------------
 
-  const weaknesses: string[] = [];
+  const backendWeaknesses: string[] =
+    Array.isArray(recommendationReport?.weaknesses)
+      ? recommendationReport.weaknesses
+          .map((item: any) =>
+            getDisplayText(item)
+          )
+          .filter(Boolean)
+      : [];
 
-  if (viralityScore < 60) {
-    weaknesses.push(
-      "Overall virality score is below the strong-performance range."
-    );
-  }
+  const weaknesses: string[] =
+    backendWeaknesses.length > 0
+      ? backendWeaknesses
+      : [];
 
-  if (engagementProbability < 60) {
-    weaknesses.push(
-      "Predicted engagement probability could be improved."
-    );
-  }
+  if (weaknesses.length === 0) {
+    if (viralityScore < 60) {
+      weaknesses.push(
+        "Overall virality score is below the strong-performance range."
+      );
+    }
 
-  if (confidence < 75) {
-    weaknesses.push(
-      "Model confidence is moderate; richer input data may improve reliability."
-    );
-  }
+    if (engagementProbability < 60) {
+      weaknesses.push(
+        "Predicted engagement probability could be improved."
+      );
+    }
 
-  if (hashtags.length < 3) {
-    weaknesses.push(
-      "Use more targeted hashtags to improve content discoverability."
-    );
-  }
+    if (confidence < 75) {
+      weaknesses.push(
+        "Model confidence is moderate; richer input data may improve reliability."
+      );
+    }
 
-  if (semanticKeywords.length === 0) {
-    weaknesses.push(
-      "The caption contains limited identifiable semantic keywords."
-    );
-  }
+    if (hashtags.length < 3) {
+      weaknesses.push(
+        "Use more targeted hashtags to improve content discoverability."
+      );
+    }
 
-  if (detectedObjects.length === 0) {
-    weaknesses.push(
-      "Visual analysis found limited identifiable objects."
-    );
+    if (semanticKeywords.length === 0) {
+      weaknesses.push(
+        "The caption contains limited identifiable semantic keywords."
+      );
+    }
+
+    if (detectedObjects.length === 0) {
+      weaknesses.push(
+        "Visual analysis found limited identifiable objects."
+      );
+    }
   }
 
   if (weaknesses.length === 0) {
@@ -279,41 +610,76 @@ export default function PredictionResult({
   }
 
   // ---------------------------------------------------------
-  // IMPROVEMENTS
+  // TOP IMPROVEMENTS
   // ---------------------------------------------------------
 
-  const improvements = [
-    {
-      title: "Strengthen the Caption",
-      description:
-        explainableAI[0] ??
-        "Create a stronger narrative opening and communicate the main value clearly.",
-      impact: "+10% to +20%",
-    },
-    {
-      title: "Improve Early Engagement",
-      description:
-        explainableAI[3] ??
-        "Use a clear call-to-action to encourage comments, shares and saves.",
-      impact: "+8% to +15%",
-    },
-    {
-      title: "Add Relevant Hashtags",
-      description:
-        explainableAI[1] ??
-        "Use focused niche hashtags instead of broad generic hashtags.",
-      impact: "+5% to +12%",
-    },
-  ];
+  const improvements =
+    reportTopImprovements.length > 0
+      ? reportTopImprovements
+          .slice(0, 5)
+          .map(
+            (item: any, index: number) => ({
+              title:
+                getDisplayText(
+                  item?.title,
+                  `Improvement ${index + 1}`
+                ),
+
+              description:
+                getDisplayText(
+                  item?.why,
+                  getDisplayText(
+                    item?.description,
+                    getDisplayText(
+                      item?.how,
+                      "Improve this area to increase content performance."
+                    )
+                  )
+                ),
+
+              impact:
+                getDisplayText(
+                  item?.impact,
+                  getDisplayText(
+                    item?.expected_improvement,
+                    "+5% to +10%"
+                  )
+                ),
+            })
+          )
+      : [
+          {
+            title: "Strengthen the Caption",
+            description:
+              explainableAI[0] ??
+              "Create a stronger narrative opening and communicate the main value clearly.",
+            impact: "+10% to +20%",
+          },
+          {
+            title: "Improve Early Engagement",
+            description:
+              explainableAI[3] ??
+              "Use a clear call-to-action to encourage comments, shares and saves.",
+            impact: "+8% to +15%",
+          },
+          {
+            title: "Add Relevant Hashtags",
+            description:
+              explainableAI[1] ??
+              "Use focused niche hashtags instead of broad generic hashtags.",
+            impact: "+5% to +12%",
+          },
+        ];
 
   // ---------------------------------------------------------
   // GAUGE
   // ---------------------------------------------------------
 
-  const gaugeDegrees = Math.min(
-    Math.max(viralityScore, 0),
-    100
-  ) * 3.6;
+  const gaugeDegrees =
+    Math.min(
+      Math.max(viralityScore, 0),
+      100
+    ) * 3.6;
 
   // ---------------------------------------------------------
   // RENDER
@@ -392,6 +758,7 @@ export default function PredictionResult({
             </div>
 
           </div>
+
         </div>
 
         {/* AI REASONING */}
@@ -404,9 +771,19 @@ export default function PredictionResult({
 
           <div className="space-y-3 text-xs leading-6 text-slate-300">
 
+            {typeof recommendationReport?.ai_reasoning ===
+              "string" ? (
+              <div className="border-b border-slate-800 pb-2">
+                {recommendationReport.ai_reasoning}
+              </div>
+            ) : null}
+
             {explainableAI.length > 0 ? (
               explainableAI.map(
-                (reason: string, index: number) => (
+                (
+                  reason: string,
+                  index: number
+                ) => (
                   <div
                     key={index}
                     className="border-b border-slate-800 pb-2 last:border-b-0"
@@ -416,14 +793,17 @@ export default function PredictionResult({
                 )
               )
             ) : (
-              <p>
-                The AI analysis has completed successfully.
-              </p>
+              !recommendationReport?.ai_reasoning && (
+                <p>
+                  The AI analysis has completed successfully.
+                </p>
+              )
             )}
 
           </div>
 
         </div>
+
       </div>
 
       {/* =====================================================
@@ -443,16 +823,21 @@ export default function PredictionResult({
           <div className="space-y-3">
 
             {strengths.map(
-              (strength: string, index: number) => (
+              (
+                strength: string,
+                index: number
+              ) => (
                 <div
                   key={index}
                   className="flex gap-2 text-xs text-slate-300"
                 >
+
                   <span className="text-emerald-400">
                     ✓
                   </span>
 
                   <span>{strength}</span>
+
                 </div>
               )
             )}
@@ -472,16 +857,21 @@ export default function PredictionResult({
           <div className="space-y-3">
 
             {weaknesses.map(
-              (weakness: string, index: number) => (
+              (
+                weakness: string,
+                index: number
+              ) => (
                 <div
                   key={index}
                   className="flex gap-2 text-xs text-slate-300"
                 >
+
                   <span className="text-red-400">
                     ✕
                   </span>
 
                   <span>{weakness}</span>
+
                 </div>
               )
             )}
@@ -489,6 +879,7 @@ export default function PredictionResult({
           </div>
 
         </div>
+
       </div>
 
       {/* =====================================================
@@ -502,13 +893,13 @@ export default function PredictionResult({
         </h3>
 
         <p className="text-xs leading-6 text-slate-300">
-          {explainableAI[0] ??
-            "Your content has been analyzed for narrative quality, engagement potential and audience response."}
+          {aiCoachMessage}
         </p>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
 
           <div className="rounded-lg bg-[#111119] p-3">
+
             <div className="text-[9px] uppercase text-slate-500">
               Engagement
             </div>
@@ -516,9 +907,11 @@ export default function PredictionResult({
             <div className="mt-1 text-lg font-bold text-cyan-400">
               {engagementProbability}%
             </div>
+
           </div>
 
           <div className="rounded-lg bg-[#111119] p-3">
+
             <div className="text-[9px] uppercase text-slate-500">
               Confidence
             </div>
@@ -526,16 +919,19 @@ export default function PredictionResult({
             <div className="mt-1 text-lg font-bold text-purple-400">
               {confidence}%
             </div>
+
           </div>
 
           <div className="rounded-lg bg-[#111119] p-3">
+
             <div className="text-[9px] uppercase text-slate-500">
-              Reach Forecast
+              Current Virality
             </div>
 
             <div className="mt-1 text-sm font-bold text-emerald-400">
-              {reachForecast}
+              {currentVirality}
             </div>
+
           </div>
 
         </div>
@@ -566,18 +962,26 @@ export default function PredictionResult({
 
               {semanticKeywords.length > 0 ? (
                 semanticKeywords.map(
-                  (item: any, index: number) => (
+                  (
+                    item: any,
+                    index: number
+                  ) => (
                     <div
                       key={index}
                       className="flex items-center justify-between rounded-lg bg-[#191923] px-3 py-2"
                     >
 
                       <span className="text-xs text-slate-200">
-                        {item.keyword ?? "keyword"}
+                        {getDisplayText(
+                          item?.keyword,
+                          "keyword"
+                        )}
                       </span>
 
                       <span className="text-xs font-bold text-purple-400">
-                        {Number(item.weight ?? 0).toFixed(2)}
+                        {Number(
+                          item?.weight ?? 0
+                        ).toFixed(2)}
                       </span>
 
                     </div>
@@ -585,11 +989,69 @@ export default function PredictionResult({
                 )
               ) : (
                 <p className="text-xs text-slate-500">
-                  No semantic keywords detected.
+                  {reportCaption?.current_caption
+                    ? `Caption: ${reportCaption.current_caption}`
+                    : "No semantic keywords detected."}
                 </p>
               )}
 
             </div>
+
+            {/* CAPTION METADATA */}
+
+            {reportCaption?.current_caption && (
+              <div className="mt-4 rounded-lg bg-[#191923] p-3">
+
+                <div className="text-[9px] uppercase text-slate-500">
+                  Current Caption
+                </div>
+
+                <p className="mt-2 text-xs leading-5 text-slate-300">
+                  {reportCaption.current_caption}
+                </p>
+
+                <div className="mt-3 grid grid-cols-3 gap-2">
+
+                  <div>
+                    <div className="text-[9px] text-slate-500">
+                      Words
+                    </div>
+
+                    <div className="text-sm font-bold text-white">
+                      {captionWordCount}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[9px] text-slate-500">
+                      Characters
+                    </div>
+
+                    <div className="text-sm font-bold text-white">
+                      {captionCharCount}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[9px] text-slate-500">
+                      Score
+                    </div>
+
+                    <div className="text-sm font-bold text-cyan-400">
+                      {captionScore}/100
+                    </div>
+                  </div>
+
+                </div>
+
+                <div className="mt-2 text-[9px] text-slate-500">
+                  Recommended length:{" "}
+                  {captionRecommendedLength}
+                </div>
+
+              </div>
+            )}
+
           </div>
 
           {/* SENTIMENT */}
@@ -649,6 +1111,7 @@ export default function PredictionResult({
               </div>
 
             </div>
+
           </div>
 
         </div>
@@ -669,6 +1132,7 @@ export default function PredictionResult({
               </p>
 
             </div>
+
           </div>
         )}
 
@@ -692,7 +1156,10 @@ export default function PredictionResult({
 
             {hashtags.length > 0 ? (
               hashtags.map(
-                (tag: string, index: number) => (
+                (
+                  tag: string,
+                  index: number
+                ) => (
                   <span
                     key={index}
                     className="rounded-md border border-pink-700/50 bg-pink-950/20 px-2 py-1 text-[10px] text-pink-300"
@@ -709,6 +1176,14 @@ export default function PredictionResult({
 
           </div>
 
+          {reportHashtags?.reason && (
+            <p className="mt-3 text-[10px] leading-5 text-slate-500">
+              {getDisplayText(
+                reportHashtags.reason
+              )}
+            </p>
+          )}
+
         </div>
 
         {/* POSTING TIME */}
@@ -724,13 +1199,11 @@ export default function PredictionResult({
             <div>
 
               <div className="text-xl font-bold text-white">
-                {temporalStamp.publishTimeUtc ??
-                  "Not available"}
+                {backendCurrentHour}
               </div>
 
               <div className="mt-1 text-[10px] text-slate-500">
-                {temporalStamp.dayOfWeek ??
-                  "Recommended publishing window"}
+                {recommendedWindow}
               </div>
 
             </div>
@@ -739,6 +1212,8 @@ export default function PredictionResult({
 
               <div
                 className={`text-sm font-bold ${
+                  postingPerformance === "Good" ||
+                  postingPerformance === "Excellent" ||
                   Number(
                     temporalStamp.optimalWindowScore ?? 0
                   ) >= 70
@@ -746,21 +1221,24 @@ export default function PredictionResult({
                     : "text-yellow-400"
                 }`}
               >
-                {Number(
-                  temporalStamp.optimalWindowScore ?? 0
-                ) >= 70
-                  ? "Above Average"
-                  : "Below Average"}
+                {postingPerformance}
               </div>
 
               <div className="text-[9px] text-slate-500">
                 Window Score{" "}
-                {temporalStamp.optimalWindowScore ?? 0}
+                {temporalStamp.optimalWindowScore ??
+                  0}
               </div>
 
             </div>
 
           </div>
+
+          {postingReason && (
+            <p className="mt-3 text-[10px] leading-5 text-slate-500">
+              {getDisplayText(postingReason)}
+            </p>
+          )}
 
         </div>
 
@@ -776,7 +1254,75 @@ export default function PredictionResult({
           Engagement Analysis
         </h3>
 
+        {/* REAL INPUT ENGAGEMENT */}
+
         <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+
+          <MetricCard
+            title="Followers"
+            value={formatNumber(
+              followerCount
+            )}
+            label="Audience Size"
+          />
+
+          <MetricCard
+            title="Initial Likes"
+            value={formatNumber(likes)}
+            label="Early Engagement"
+          />
+
+          <MetricCard
+            title="Comments"
+            value={formatNumber(comments)}
+            label="Early Comments"
+          />
+
+          <MetricCard
+            title="Shares"
+            value={formatNumber(shares)}
+            label="Early Shares"
+          />
+
+        </div>
+
+        {/* ADDITIONAL ENGAGEMENT DATA */}
+
+        <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+
+          <MetricCard
+            title="Saves"
+            value={formatNumber(saves)}
+            label="Saved Content"
+          />
+
+          <MetricCard
+            title="Reach"
+            value={formatNumber(reach)}
+            label="Current Reach"
+          />
+
+          <MetricCard
+            title="Impressions"
+            value={formatNumber(
+              impressions
+            )}
+            label="Total Impressions"
+          />
+
+          <MetricCard
+            title="Engagement Probability"
+            value={`${engagementProbability}%`}
+            label={getEngagementLabel(
+              engagementProbability
+            )}
+          />
+
+        </div>
+
+        {/* EXISTING VELOCITY DATA */}
+
+        <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
 
           <MetricCard
             title="Initial Likes / Min"
@@ -818,20 +1364,27 @@ export default function PredictionResult({
 
         <div className="mt-5 space-y-2">
 
-          {explainableAI.slice(0, 4).map(
-            (item: string, index: number) => (
-              <div
-                key={index}
-                className="flex gap-2 text-xs text-slate-300"
-              >
-                <span className="text-emerald-400">
-                  ✓
-                </span>
+          {explainableAI
+            .slice(0, 4)
+            .map(
+              (
+                item: string,
+                index: number
+              ) => (
+                <div
+                  key={index}
+                  className="flex gap-2 text-xs text-slate-300"
+                >
 
-                <span>{item}</span>
-              </div>
-            )
-          )}
+                  <span className="text-emerald-400">
+                    ✓
+                  </span>
+
+                  <span>{item}</span>
+
+                </div>
+              )
+            )}
 
         </div>
 
@@ -861,7 +1414,10 @@ export default function PredictionResult({
               detectedObjects.length > 0
                 ? `${Math.round(
                     detectedObjects.reduce(
-                      (sum: number, obj: any) =>
+                      (
+                        sum: number,
+                        obj: any
+                      ) =>
                         sum +
                         Number(
                           obj.confidence ?? 0
@@ -877,7 +1433,9 @@ export default function PredictionResult({
 
           <MetricCard
             title="CLIP Embedding"
-            value={clipEmbeddingDimension}
+            value={
+              clipEmbeddingDimension
+            }
             label="Dimension"
           />
 
@@ -904,7 +1462,10 @@ export default function PredictionResult({
             <div className="flex flex-wrap gap-3">
 
               {dominantColors.map(
-                (color: any, index: number) => (
+                (
+                  color: any,
+                  index: number
+                ) => (
                   <div
                     key={index}
                     className="flex items-center gap-2 rounded-lg bg-[#191923] px-3 py-2"
@@ -926,7 +1487,9 @@ export default function PredictionResult({
                     </span>
 
                     <span className="text-[10px] text-slate-500">
-                      {color.percentage ?? 0}%
+                      {color.percentage ??
+                        0}
+                      %
                     </span>
 
                   </div>
@@ -934,6 +1497,26 @@ export default function PredictionResult({
               )}
 
             </div>
+
+          </div>
+        )}
+
+        {/* BACKEND IMAGE ANALYSIS NOTE */}
+
+        {recommendationReport?.image_analysis && (
+          <div className="mt-5 rounded-lg bg-[#191923] p-3">
+
+            <p className="text-[10px] leading-5 text-slate-500">
+              {getDisplayText(
+                recommendationReport
+                  .image_analysis?.note,
+                getDisplayText(
+                  recommendationReport
+                    .image_analysis?.status
+                )
+              )}
+            </p>
+
           </div>
         )}
 
@@ -1106,4 +1689,56 @@ function PipelineCard({
 
     </div>
   );
+}
+
+/* =========================================================
+   SCORE HELPERS
+========================================================= */
+
+function getScoreLabel(score: number) {
+  if (score >= 80) return "Excellent";
+  if (score >= 65) return "Strong";
+  if (score >= 50) return "Average";
+  if (score >= 35) return "Below Average";
+  return "Low Potential";
+}
+
+function getScoreClass(score: number) {
+  if (score >= 80) {
+    return "text-emerald-400";
+  }
+
+  if (score >= 65) {
+    return "text-cyan-400";
+  }
+
+  if (score >= 50) {
+    return "text-yellow-400";
+  }
+
+  return "text-red-400";
+}
+
+function getConfidenceLabel(score: number) {
+  if (score >= 90) return "Very High";
+  if (score >= 75) return "High";
+  if (score >= 60) return "Moderate";
+  return "Low";
+}
+
+function getEngagementLabel(score: number) {
+  if (score >= 80) return "Very High";
+  if (score >= 65) return "High";
+  if (score >= 50) return "Moderate";
+  return "Low";
+}
+
+function formatNumber(value: any) {
+  const number = Number(value);
+
+  if (Number.isNaN(number)) {
+    return "0";
+  }
+
+  return number.toLocaleString();
 }

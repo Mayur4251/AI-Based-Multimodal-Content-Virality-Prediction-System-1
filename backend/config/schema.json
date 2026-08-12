@@ -4,14 +4,10 @@
     "post_hour",
     "day_of_week",
     "follower_count",
-    "early_likes",
-    "early_shares",
-    "early_comments",
-    "saves",
-    "reach",
-    "impressions",
     "caption_len",
-    "caption_word_count"
+    "caption_word_count",
+    "hook_score",
+    "hashtag_count"
   ],
   "sentiment_columns": [
     "sent_neg",
@@ -24,13 +20,21 @@
     "content_category"
   ],
   "target_column": "viral",
-  "dropped_leakage_columns": [
+  "excluded_columns": [
     "engagement_rate",
-    "performance_bucket_label"
+    "performance_bucket_label",
+    "early_likes",
+    "early_shares",
+    "early_comments",
+    "saves",
+    "reach",
+    "impressions",
+    "viral_probability"
   ],
   "id_columns_not_used_as_features": [
     "post_id",
     "source_image_name",
     "image_path"
-  ]
+  ],
+  "note": "early_likes/early_shares/early_comments/saves/reach/impressions are POST-PUBLISH outcomes and are never used as features, at train time or inference time."
 }
