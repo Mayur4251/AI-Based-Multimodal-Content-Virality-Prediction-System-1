@@ -135,6 +135,9 @@ export default function PredictionView({
 
           <PredictionResult
             prediction={prediction}
+            recommendationReport={recommendationReport}
+            predictionInput={predictionInput}
+            onInputChange={onInputChange}
           />
 
         </section>

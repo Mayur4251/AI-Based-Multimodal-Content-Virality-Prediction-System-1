@@ -155,7 +155,7 @@ export default function DashboardView({
             </div>
 
             <span className="text-[10px] font-mono text-purple-400 px-2.5 py-1 rounded-md bg-purple-950/80 border border-purple-800 font-medium">
-              Live Curve
+              Live Chart
             </span>
           </div>
 

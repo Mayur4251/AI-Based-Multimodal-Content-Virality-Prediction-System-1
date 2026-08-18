@@ -10,6 +10,16 @@ export interface PredictionFormState {
 
   follower_count: number;
 
+  // Post-publish only (optional, default 0). These feed ONLY the
+  // recommendation engine's "how is my live post doing" analytics --
+  // never the ML virality prediction. See app.py / inference.py.
+  early_likes: number;
+  early_comments: number;
+  early_shares: number;
+  saves: number;
+  reach: number;
+  impressions: number;
+
   media_type: string;
   content_category: string;
   platform: string;
@@ -21,13 +31,19 @@ export interface PredictionFormState {
   image: File | null;
 }
 
-
 export const DEFAULT_INPUT: PredictionFormState = {
   caption: "",
   post_hour: 18,
   day_of_week: 1,
 
   follower_count: 0,
+
+  early_likes: 0,
+  early_comments: 0,
+  early_shares: 0,
+  saves: 0,
+  reach: 0,
+  impressions: 0,
 
   media_type: "image",
   content_category: "Lifestyle",
@@ -65,10 +81,13 @@ export interface CaptionAnalysis {
   has_emoji: boolean;
   has_question: boolean;
   has_story?: boolean;
-  expected_improvement: string;
   ai_suggested_caption: string;
-  engagement_boost: string;
-  comments_boost: string;
+  reason?: string;
+  // Step 3: honestly reports where ai_suggested_caption actually came
+  // from -- "gemini" (genuine generation), "unavailable" (no API key
+  // configured), or "error" (Gemini call failed, template kept as-is).
+  caption_source?: "gemini" | "unavailable" | "error";
+  caption_source_note?: string;
 }
 
 // =============================
@@ -79,7 +98,6 @@ export interface HashtagAnalysis {
   current: string[];
   recommended: string[];
   reason: string;
-  expected_boost: string;
 }
 
 // =============================
@@ -88,29 +106,51 @@ export interface HashtagAnalysis {
 
 export interface PostingTimeAnalysis {
   current_time: string;
+  current_hour?: number | null;
   performance: string;
   recommended_window: string;
   reason: string;
-  expected_boost: string;
 }
 
 // =============================
-// Engagement
+// Engagement (post-publish only, optional / can be null)
 // =============================
 
-export interface EngagementMetric {
+export interface EngagementRateBlock {
   value: number;
+  rate_vs_followers: number;
+  rate_vs_reach: number;
   status: string;
-  note: string;
+  // True when this value is a forecast (from estimate_missing_engagement
+  // in recommendation_engine.py) rather than a number the user actually
+  // supplied. Never render this as tracked/live data without the badge.
+  estimated: boolean;
 }
 
 export interface EngagementAnalysis {
-  likes: EngagementMetric;
-  comments: EngagementMetric;
-  shares: EngagementMetric;
-  saves: EngagementMetric;
+  followers: number;
+  reach: number;
+  reach_estimated: boolean;
+  impressions: number;
+  impressions_estimated: boolean;
+  likes: EngagementRateBlock;
+  comments: EngagementRateBlock;
+  shares: EngagementRateBlock;
+  saves: EngagementRateBlock;
+  reach_rate: number;
+  engagement_rate: number;
+  // Which denominator engagement_rate was actually computed against.
+  // "none" means followers/reach/impressions were all 0 or unavailable.
+  engagement_rate_basis: "reach" | "impressions" | "followers" | "none";
+  impressions_per_reached_user: number;
+  total_engagement: number;
   recommended_actions: string[];
-  expected_improvement: string;
+  // True if ANY field in this panel is a forecast rather than a number
+  // the user supplied.
+  has_estimated_values: boolean;
+  // Human-readable disclosure shown when has_estimated_values is true;
+  // null otherwise.
+  estimate_note: string | null;
 }
 
 // =============================
@@ -118,14 +158,22 @@ export interface EngagementAnalysis {
 // =============================
 
 export interface ImageAnalysis {
-  brightness: number | string;
-  contrast: number | string;
-  sharpness: number | string;
-  faces: string;
-  composition: string;
+  status?: string;
+  note?: string;
+  brightness?: number | string;
+  brightness_label?: string;
+  contrast?: number | string;
+  saturation?: number | string;
+  saturation_label?: string;
+  colorfulness?: number | string;
+  sharpness?: number | string;
+  detail_label?: string;
+  tone?: string;
+  composition?: string;
+  aspect_ratio?: number | string;
+  faces?: string;
   color_harmony?: string;
-  suggestions: string[];
-  expected_improvement: string;
+  suggestions?: string[];
 }
 
 // =============================
@@ -137,7 +185,6 @@ export interface TopImprovement {
   title: string;
   why: string;
   how: string;
-  impact: string;
   difficulty: string;
   time_required: string;
   stars: number;
@@ -149,7 +196,11 @@ export interface TopImprovement {
 
 export interface ExplainableFeature {
   name: string;
-  influence: number;
+  // Rule-based read of the same real numbers shown elsewhere in the
+  // report (caption score, hashtag count, posting-time performance,
+  // engagement/reach rate thresholds, real image features) -- NOT
+  // trained-model SHAP importance.
+  status: "Strong" | "Moderate" | "Needs Attention" | "Informational";
   description: string;
 }
 
@@ -159,7 +210,6 @@ export interface ExplainableFeature {
 
 export interface AIContentCoach {
   current_virality: string;
-  projected_virality: string;
   message: string;
 }
 
@@ -169,15 +219,8 @@ export interface AIContentCoach {
 
 export interface FinalActionPlan {
   today: string[];
-
-  expected_results: {
-    engagement: string;
-    reach: string;
-    comments: string;
-    shares: string;
-    virality_from: string;
-    virality_to: string;
-  };
+  based_on_current_prediction: string;
+  note: string;
 }
 
 // =============================
@@ -185,9 +228,11 @@ export interface FinalActionPlan {
 // =============================
 
 export interface RecommendationData {
-  overall_content_score?: number;
-
   category: string;
+  platform: string;
+  media_type: string;
+  keywords: string[];
+
   ai_reasoning: string;
 
   strengths: string[];
@@ -199,7 +244,8 @@ export interface RecommendationData {
 
   posting_time: PostingTimeAnalysis;
 
-  engagement_analysis: EngagementAnalysis;
+  // null unless real post-publish engagement numbers were supplied
+  engagement_analysis: EngagementAnalysis | null;
 
   image_analysis: ImageAnalysis;
 
@@ -211,7 +257,16 @@ export interface RecommendationData {
 
   final_action_plan: FinalActionPlan;
 
+  // compatibility fields added by RecommendationEngine.generate_report
   priority_actions?: string[];
+  hashtag_analysis?: HashtagAnalysis;
+  action_plan?: string[];
+  top_factors?: ExplainableFeature[];
+  explainability?: {
+    top_factors: ExplainableFeature[];
+    action_plan: string[];
+    hashtag_analysis: HashtagAnalysis;
+  };
 }
 
 // =============================
@@ -238,17 +293,11 @@ export interface PredictApiResponse {
 
 export interface HistoryEntry {
   id: string;
-
   platform: string;
-
   viralityScore: number;
-
   confidence: number;
-
   caption: string;
-
   timestamp: string;
-
   predictedReach: string;
 }
 

@@ -226,11 +226,6 @@ export default function AuthGateView({
               <span className="text-lg font-extrabold tracking-tight text-white">
                 ViralAI
               </span>
-
-              <span className="px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-300 text-[10px] font-mono font-semibold">
-                v2.5 PRO
-              </span>
-
             </div>
 
             <p className="text-[11px] text-zinc-400 font-medium">
@@ -343,7 +338,7 @@ export default function AuthGateView({
               </h3>
 
               <p className="text-[11px] text-zinc-400 leading-snug">
-                Calculated viral probability scores across 5 social
+                Calculated viral probability scores across 4 social
                 platforms.
               </p>
 
@@ -382,16 +377,6 @@ export default function AuthGateView({
 
               <span>
                 Firebase Auth Protected
-              </span>
-
-            </div>
-
-            <div className="flex items-center gap-1.5">
-
-              <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
-
-              <span>
-                Gemini 2.5 Flash Engine
               </span>
 
             </div>
@@ -727,12 +712,6 @@ export default function AuthGateView({
       {/* --------------------------------------------------
           FOOTER
       -------------------------------------------------- */}
-
-      <footer className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6 border-t border-zinc-800/60 text-center text-xs text-zinc-600 font-mono">
-
-        © 2026 ViralAI Studio Inc. · Powered by Google Gemini & Firebase Firestore.
-
-      </footer>
 
     </div>
   );

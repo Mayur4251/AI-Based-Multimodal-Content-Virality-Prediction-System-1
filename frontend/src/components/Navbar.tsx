@@ -72,7 +72,7 @@ export default function Navbar({
           </div>
           <div className="flex flex-col">
             <span className="font-sans font-semibold text-sm tracking-tight text-zinc-100 flex items-center gap-2">
-              ViralAI <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/60 font-normal">v3.2</span>
+              ViralAI 
             </span>
             <span className="text-[10px] text-zinc-500 font-sans tracking-normal">Multimodal Content Virality Engine</span>
           </div>

@@ -62,14 +62,22 @@ class PredictionRequest(BaseModel):
     content_category: str
     platform: str = "Instagram"
     model: str = "ensemble"
-
     # Text enrichment
     keywords: str = ""
     hashtags: str = ""
-
     # Image -- now actually used, see note above
     imageBase64: str = ""
     imageMimeType: str = ""
+
+    # Post-publish only, all optional (default 0). Used ONLY for the
+    # recommendation engine's post-publish engagement analytics panel.
+    # NEVER forwarded to predict_virality() -- see post_payload split below.
+    early_likes: int = 0
+    early_comments: int = 0
+    early_shares: int = 0
+    saves: int = 0
+    reach: int = 0
+    impressions: int = 0
 
 
 # -------------------------------
@@ -84,15 +92,90 @@ def home():
 
 
 # -------------------------------
+# Helper: turn real computed image features into a human-readable
+# image_analysis dict for the recommendation report. Only called when
+# inference.py reports image_analysis_available=True -- i.e. only ever
+# built from real numbers, never fabricated. See inference.py /
+# image_features.py for how these numbers are computed.
+# -------------------------------
+
+def _build_image_analysis(image_features: dict) -> dict:
+    brightness = image_features["img_brightness_mean"]
+    brightness_std = image_features["img_brightness_std"]
+    saturation = image_features["img_saturation_mean"]
+    colorfulness = image_features["img_colorfulness"]
+    edge_density = image_features["img_edge_density"]
+    warm_ratio = image_features["img_warm_ratio"]
+    aspect_ratio = image_features["img_aspect_ratio"]
+
+    # Plain descriptive labels based on where each real metric falls in its
+    # own natural range (0-255 for brightness/saturation, 0-1 for
+    # edge_density/warm_ratio). These are NOT claimed to be the exact
+    # thresholds the model was trained to favor -- see note above this
+    # function's docstring in the surrounding chat message.
+    if brightness < 85:
+        brightness_label = "Dark"
+    elif brightness < 170:
+        brightness_label = "Balanced"
+    else:
+        brightness_label = "Bright"
+
+    if saturation < 60:
+        saturation_label = "Muted / low saturation"
+    elif saturation < 150:
+        saturation_label = "Moderate saturation"
+    else:
+        saturation_label = "Highly saturated"
+
+    if edge_density < 0.05:
+        detail_label = "Low visual detail / smooth"
+    elif edge_density < 0.15:
+        detail_label = "Moderate visual detail"
+    else:
+        detail_label = "High visual detail / busy"
+
+    tone_label = "Warm-toned" if warm_ratio >= 0.5 else "Cool-toned"
+
+    if aspect_ratio > 1.2:
+        composition = "Landscape orientation"
+    elif aspect_ratio < 0.85:
+        composition = "Portrait orientation"
+    else:
+        composition = "Roughly square orientation"
+
+    return {
+        "status": "Computed from the uploaded image",
+        "note": (
+            "These values are computed directly from the uploaded image "
+            "(handcrafted visual features, not a fabricated estimate). "
+            "See image_features.py for the exact formulas."
+        ),
+        "brightness": round(brightness, 1),
+        "brightness_label": brightness_label,
+        "contrast": round(brightness_std, 1),
+        "saturation": round(saturation, 1),
+        "saturation_label": saturation_label,
+        "colorfulness": round(colorfulness, 1),
+        "sharpness": round(edge_density, 4),
+        "detail_label": detail_label,
+        "tone": tone_label,
+        "composition": composition,
+        "aspect_ratio": round(aspect_ratio, 3),
+    }
+
+
+# -------------------------------
 # Prediction API
 # -------------------------------
 
 @app.post("/api/predict")
 def predict(data: PredictionRequest):
-
     try:
-
-        post_payload = {
+        # ml_payload: EXACTLY the pre-publish fields the trained model
+        # uses. This is what goes to predict_virality() -- never touch
+        # this to add post-publish fields, or you recreate the original
+        # leakage bug.
+        ml_payload = {
             "caption": data.caption,
             "post_hour": data.post_hour,
             "day_of_week": data.day_of_week,
@@ -100,23 +183,42 @@ def predict(data: PredictionRequest):
             "media_type": data.media_type,
             "content_category": data.content_category,
             "platform": data.platform,
-
-            # Text enrichment
             "keywords": data.keywords,
             "hashtags": data.hashtags,
-
-            # Image -- FIX: this was previously missing from post_payload,
-            # so predict_virality() never saw the uploaded image at all.
             "imageBase64": data.imageBase64,
         }
-
         result = predict_virality(
-            post_payload,
+            ml_payload,
             model=data.model
         )
 
+        # Build image_analysis ONLY from real computed features. If no
+        # image was supplied or it couldn't be decoded, image_analysis
+        # stays None -- recommendation_engine.py's existing fallback
+        # ("No detailed image analysis provided" / "no image-trained
+        # virality model is being claimed") is honest and correct for
+        # that case, so we deliberately do not fabricate a substitute.
+        image_analysis = None
+        if result.get("image_analysis_available") and result.get("image_features"):
+            image_analysis = _build_image_analysis(result["image_features"])
+
+        # recommendation_payload: ml_payload PLUS the optional post-publish
+        # engagement numbers PLUS the real image analysis (if available).
+        # Only the recommendation engine sees these -- it decides
+        # internally (via have_engagement_data / image_analysis presence)
+        # how to use them for the separate panels.
+        recommendation_payload = {
+            **ml_payload,
+            "early_likes": data.early_likes,
+            "early_comments": data.early_comments,
+            "early_shares": data.early_shares,
+            "saves": data.saves,
+            "reach": data.reach,
+            "impressions": data.impressions,
+            "image_analysis": image_analysis,
+        }
         recommendation_report = recommendation_engine.generate_report(
-            post_payload,
+            recommendation_payload,
             result
         )
 

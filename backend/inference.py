@@ -13,20 +13,39 @@ Usage:
         "hashtags": "#dogsofinstagram #puppy",
         "imageBase64": "data:image/jpeg;base64,...",  # optional
     })
-    # -> {"viral": 1, "viral_probability": 0.83, "model": "ensemble"}
+    # -> {
+    #      "viral": 1,
+    #      "viral_probability": 0.83,
+    #      "model": "ensemble",
+    #      "image_features": {...} or None,
+    #      "image_analysis_available": True/False,
+    #    }
 
-WHAT CHANGED (v2)
+WHAT CHANGED (v3)
 -------------------
-imageBase64 is now decoded and turned into the same handcrafted image
-features (img_brightness_mean, img_colorfulness, etc. -- see
-image_features.py) that train_pipeline.py computes from disk images via
-relabel_dataset.py. These MUST match exactly or the feature vector won't
-align with what the scaler expects -- both call
-image_features.extract_image_features()/extract_from_base64()/
-extract_from_path() from the same module, never separately reimplemented.
+predict_virality() now RETURNS the real computed image features (and
+whether image analysis was actually available) alongside the prediction,
+instead of computing them internally and silently discarding them after
+building the ML feature vector. This is what app.py needs to pass real
+image analysis into the recommendation report -- previously that was
+impossible because this function never surfaced the data at all.
 
-If no image is supplied, extract_from_base64("") returns neutral default
-values (see DEFAULT_FEATURES in image_features.py) rather than zeros, so a
+image_analysis_available is False (and image_features is None) whenever no
+image was supplied, or the supplied image could not be decoded -- callers
+must not treat DEFAULT_FEATURES as if they were real measurements.
+
+WHAT CHANGED (v2, unchanged from before)
+-------------------------------------------
+imageBase64 is decoded and turned into the same handcrafted image features
+(img_brightness_mean, img_colorfulness, etc. -- see image_features.py) that
+train_pipeline.py computes from disk images via relabel_dataset.py. These
+MUST match exactly or the feature vector won't align with what the scaler
+expects -- both call functions from the same image_features.py module,
+never separately reimplemented.
+
+If no image is supplied, extract_from_base64_with_status("") returns
+neutral default values (see DEFAULT_FEATURES in image_features.py) for the
+ML feature vector -- unchanged behavior -- rather than zeros, so a
 caption-only prediction doesn't get an artificial penalty/boost from a
 missing image.
 
@@ -44,6 +63,7 @@ import pandas as pd
 from scipy import sparse
 
 from pathlib import Path
+from typing import Dict, Tuple
 
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -55,7 +75,7 @@ except ImportError:  # pragma: no cover
             def polarity_scores(self, text: str) -> dict:
                 return {"neg": 0.0, "neu": 1.0, "pos": 0.0, "compound": 0.0}
 
-from image_features import extract_from_base64
+from image_features import extract_from_base64_with_status
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -110,13 +130,17 @@ def _hashtag_count(caption: str, hashtags_field: str) -> int:
     return str(caption).count("#")
 
 
-def _row_to_features(post: dict) -> sparse.csr_matrix:
+def _row_to_features(post: dict) -> Tuple[sparse.csr_matrix, Dict[str, float], bool]:
     """Turn a single raw post dict into the fused feature vector used at train time.
 
     post is expected to carry ONLY pre-publish fields:
     caption, post_hour, day_of_week, follower_count, media_type,
     content_category, hashtags (optional), keywords (optional),
     imageBase64 (optional).
+
+    Returns (feature_matrix, image_features, image_analysis_available) so
+    callers (predict_virality) can report real image analysis instead of
+    discarding it after it's folded into the numeric feature vector.
     """
     caption = str(post.get("caption", "")).strip()
 
@@ -125,7 +149,9 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
     sentiment = _sia.polarity_scores(caption)
     sent_row = {f"sent_{k}": v for k, v in sentiment.items()}
 
-    image_features = extract_from_base64(post.get("imageBase64", ""))
+    image_features, image_analysis_available = extract_from_base64_with_status(
+        post.get("imageBase64", "")
+    )
 
     meta_row = {
         "post_hour": post.get("post_hour", 0),
@@ -147,7 +173,11 @@ def _row_to_features(post: dict) -> sparse.csr_matrix:
     }])[_CAT_COLS]
     cat_matrix = _ohe.transform(cat_df)
 
-    return sparse.hstack([tfidf_vec, sparse.csr_matrix(meta_scaled), cat_matrix]).tocsr()
+    feature_matrix = sparse.hstack(
+        [tfidf_vec, sparse.csr_matrix(meta_scaled), cat_matrix]
+    ).tocsr()
+
+    return feature_matrix, image_features, image_analysis_available
 
 
 def predict_virality(post: dict, model: str = "ensemble") -> dict:
@@ -161,11 +191,19 @@ def predict_virality(post: dict, model: str = "ensemble") -> dict:
     """
     if model not in _MODELS:
         raise ValueError(f"model must be one of {list(_MODELS)}")
-    X = _row_to_features(post)
+    X, image_features, image_analysis_available = _row_to_features(post)
     clf = _MODELS[model]
     proba = float(clf.predict_proba(X)[0, 1])
     pred = int(proba >= 0.5)
-    return {"viral": pred, "viral_probability": round(proba, 4), "model": model}
+    return {
+        "viral": pred,
+        "viral_probability": round(proba, 4),
+        "model": model,
+        # Real computed image features, or None if no image was supplied /
+        # decoding failed -- never fabricated. See image_features.py.
+        "image_features": image_features if image_analysis_available else None,
+        "image_analysis_available": image_analysis_available,
+    }
 
 
 def predict_batch(posts: list, model: str = "ensemble") -> list:

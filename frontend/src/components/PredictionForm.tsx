@@ -4,7 +4,6 @@ import {
   Upload,
   Image as ImageIcon,
   X,
-  Wand2,
   Clock,
   Users,
   ThumbsUp,
@@ -91,6 +90,7 @@ const PRESET_TEMPLATES = [
     followers: 12500,
     likes: 340,
     comments: 48,
+    shares: 22,
     post_hour: 18,
     day_of_week: 1,
   },
@@ -104,6 +104,7 @@ const PRESET_TEMPLATES = [
     followers: 8200,
     likes: 420,
     comments: 64,
+    shares: 35,
     post_hour: 12,
     day_of_week: 2,
   },
@@ -117,6 +118,7 @@ const PRESET_TEMPLATES = [
     followers: 24000,
     likes: 890,
     comments: 135,
+    shares: 90,
     post_hour: 17,
     day_of_week: 3,
   }
@@ -152,6 +154,12 @@ export default function PredictionForm({
         post_hour: 18,
         day_of_week: 1,
         follower_count: 5000,
+        early_likes: 0,
+        early_comments: 0,
+        early_shares: 0,
+        saves: 0,
+        reach: 0,
+        impressions: 0,
         media_type: "image",
         content_category: "Lifestyle",
         platform: "Instagram",
@@ -172,6 +180,9 @@ export default function PredictionForm({
       keywords: preset.keywords,
       hashtags: preset.hashtags,
       follower_count: preset.followers,
+      early_likes: preset.likes,
+      early_comments: preset.comments,
+      early_shares: preset.shares,
       post_hour: preset.post_hour,
       day_of_week: preset.day_of_week,
     }));
@@ -198,18 +209,6 @@ export default function PredictionForm({
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleFileChange(e.dataTransfer.files[0]);
     }
-  };
-
-  const generateQuickHook = () => {
-    const hooks = [
-      "Here is the secret nobody tells you about ",
-      "I tested this for 30 days and the results shocked me: ",
-      "3 mistakes everyone makes when starting out with ",
-      "If you want to achieve 10x growth in 2026, start doing this: "
-    ];
-    const randomHook = hooks[Math.floor(Math.random() * hooks.length)];
-    const categoryTopic = (predictionInput.content_category || "content").toLowerCase();
-    updateField("caption", `${randomHook}${categoryTopic}.\n\n` + predictionInput.caption);
   };
 
   const currentHourInfo = HOURS.find((h) => h.hour === predictionInput.post_hour) || HOURS[18];
@@ -375,20 +374,10 @@ export default function PredictionForm({
 
         {/* 3. Post Caption Copy */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
-              <MessageSquare className="w-4 h-4 text-purple-400" />
-              Post Caption Copy <span className="text-purple-400 text-xs font-normal">(Caption or Image required *)</span>
-            </label>
-            <button
-              type="button"
-              onClick={generateQuickHook}
-              className="inline-flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 font-medium transition bg-purple-500/10 px-2 py-0.5 rounded"
-            >
-              <Wand2 className="w-3 h-3" />
-              <span>Insert Hook Generator</span>
-            </button>
-          </div>
+          <label className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-purple-400" />
+            Post Caption Copy <span className="text-purple-400 text-xs font-normal">(Caption is required *)</span>
+          </label>
 
           <textarea
             rows={4}
@@ -552,11 +541,11 @@ export default function PredictionForm({
           />
         </div>
 
-        {/* 7. Account Followers (pre-publish signal only) */}
+        {/* 7. Account Followers & Post-Publish Engagement (optional) */}
         <div className="pt-4 border-t border-zinc-800 space-y-3">
           <label className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
             <Users className="w-4 h-4 text-purple-400" />
-            Account Followers
+            Account Followers & Early Engagement
           </label>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -572,6 +561,60 @@ export default function PredictionForm({
                 onChange={(e) => {
                   const val = e.target.value;
                   updateField("follower_count", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
+                }}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1 flex items-center gap-1">
+                <ThumbsUp className="w-3 h-3 text-purple-400" />
+                Early Likes
+              </label>
+              <input
+                type="number"
+                min={0}
+                placeholder="0"
+                value={predictionInput.early_likes === 0 ? "" : predictionInput.early_likes}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  updateField("early_likes", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
+                }}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1 flex items-center gap-1">
+                <MessageSquare className="w-3 h-3 text-purple-400" />
+                Early Comments
+              </label>
+              <input
+                type="number"
+                min={0}
+                placeholder="0"
+                value={predictionInput.early_comments === 0 ? "" : predictionInput.early_comments}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  updateField("early_comments", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
+                }}
+                className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1 flex items-center gap-1">
+                <Share2 className="w-3 h-3 text-purple-400" />
+                Early Shares
+              </label>
+              <input
+                type="number"
+                min={0}
+                placeholder="0"
+                value={predictionInput.early_shares === 0 ? "" : predictionInput.early_shares}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  updateField("early_shares", val === "" ? 0 : Math.max(0, parseInt(val, 10) || 0));
                 }}
                 className="w-full rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-sm text-white focus:border-purple-500 focus:outline-none placeholder-zinc-500"
               />

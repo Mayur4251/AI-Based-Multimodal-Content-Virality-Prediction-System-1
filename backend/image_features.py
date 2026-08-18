@@ -45,7 +45,7 @@ expect. Both call extract_image_features(); do not duplicate this logic.
 
 import base64
 import io
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -198,3 +198,24 @@ def extract_from_base64(data_url_or_b64: str) -> Dict[str, float]:
             return extract_image_features(img)
     except Exception:
         return dict(DEFAULT_FEATURES)
+
+
+def extract_from_base64_with_status(data_url_or_b64: str) -> Tuple[Dict[str, float], bool]:
+    """
+    Same as extract_from_base64(), but also reports whether a real image
+    was actually decoded and analyzed (True) versus neutral defaults being
+    used because no image was supplied or decoding failed (False). Lets
+    callers report image analysis honestly instead of treating default
+    placeholder numbers as if they were real measurements.
+    """
+    if not data_url_or_b64:
+        return dict(DEFAULT_FEATURES), False
+    try:
+        raw = data_url_or_b64
+        if "," in raw and raw.strip().lower().startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        img_bytes = base64.b64decode(raw)
+        with Image.open(io.BytesIO(img_bytes)) as img:
+            return extract_image_features(img), True
+    except Exception:
+        return dict(DEFAULT_FEATURES), False

@@ -1,1699 +1,820 @@
-import React from "react";
-import type { BackendPrediction } from "../types";
+import React, { useState } from "react";
+import type {
+  BackendPrediction,
+  RecommendationData,
+  PredictionFormState,
+} from "../types";
 
 interface PredictionResultProps {
   prediction: BackendPrediction;
+  recommendationReport?: RecommendationData;
+  predictionInput?: PredictionFormState;
+  onInputChange?: React.Dispatch<React.SetStateAction<PredictionFormState>>;
 }
 
-/*
-  The backend response can evolve over time.
-  We keep BackendPrediction as the main type, while allowing
-  the component to safely read additional prediction fields.
-*/
-type PredictionData = BackendPrediction & Record<string, any>;
+/**
+ * Parses a window string like "6:00 PM – 9:00 PM" and returns the start
+ * hour in 24-hour time (18 for the example above). Returns null if the
+ * string doesn't match the expected format rather than guessing.
+ */
+function parseWindowStartHour(window: string | undefined): number | null {
+  if (!window) return null;
+  const match = window.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return null;
+  let hour = parseInt(match[1], 10);
+  const period = match[3].toUpperCase();
+  if (period === "AM") {
+    hour = hour === 12 ? 0 : hour;
+  } else {
+    hour = hour === 12 ? 12 : hour + 12;
+  }
+  return hour;
+}
+
+/**
+ * Weakness strings (from recommendation_engine.py) that are all resolved
+ * by the SAME fix -- rewriting the caption. These get grouped into one
+ * consolidated suggestion box instead of one identical box per weakness.
+ */
+const CAPTION_WEAKNESS_PATTERNS = [
+  "caption is very short",
+  "caption is somewhat short",
+  "no direct question",
+  "no clear call-to-action",
+  "no emoji was detected",
+  "more personal context",
+];
+
+function isCaptionWeakness(weakness: string): boolean {
+  const w = weakness.toLowerCase();
+  return CAPTION_WEAKNESS_PATTERNS.some((p) => w.includes(p));
+}
+
+/**
+ * Maps a non-caption weakness string to a suggested fix + an apply action
+ * that updates the actual form field it refers to. Caption-related
+ * weaknesses are handled separately as a single grouped suggestion (see
+ * isCaptionWeakness / the grouped block in the Weaknesses card) rather
+ * than through this function, so each one doesn't get its own identical
+ * "apply caption rewrite" box. Engagement-related weaknesses (no
+ * shares/saves/comments recorded, low reach) don't get a suggestion at
+ * all -- there's no legitimate value to auto-fill for those without
+ * fabricating post-publish data.
+ */
+function getSuggestion(
+  weakness: string,
+  suggestedHashtags: RecommendationData["suggested_hashtags"] | undefined,
+  postingTime: RecommendationData["posting_time"] | undefined,
+  predictionInput: PredictionFormState | undefined,
+  onInputChange: React.Dispatch<React.SetStateAction<PredictionFormState>> | undefined
+): { text: string; apply: () => void } | null {
+  if (!onInputChange || !predictionInput) return null;
+
+  const w = weakness.toLowerCase();
+
+  if (w.includes("hashtag(s) detected") && suggestedHashtags?.recommended?.length) {
+    const tags = suggestedHashtags.recommended.join(", ");
+    return {
+      text: `Use: ${tags}`,
+      apply: () =>
+        onInputChange((prev) => ({
+          ...prev,
+          hashtags: tags,
+          keywords: tags,
+        })),
+    };
+  }
+
+  if (w.includes("posting time") && w.includes("outside")) {
+    const startHour = parseWindowStartHour(postingTime?.recommended_window);
+    if (startHour !== null) {
+      const label12 =
+        startHour === 0
+          ? "12:00 AM"
+          : startHour < 12
+          ? `${startHour}:00 AM`
+          : startHour === 12
+          ? "12:00 PM"
+          : `${startHour - 12}:00 PM`;
+      return {
+        text: `Set posting time to ${label12} (start of ${postingTime?.recommended_window})`,
+        apply: () =>
+          onInputChange((prev) => ({ ...prev, post_hour: startHour })),
+      };
+    }
+  }
+
+  return null;
+}
 
 export default function PredictionResult({
   prediction,
+  recommendationReport,
+  predictionInput,
+  onInputChange,
 }: PredictionResultProps) {
-  const p = prediction as PredictionData;
+  const [appliedKeys, setAppliedKeys] = useState<Set<string>>(new Set());
 
   // ---------------------------------------------------------
-  // BASIC VALUES
+  // CORE SCORE (from the real trained ML model)
   // ---------------------------------------------------------
 
-  const viralityScore = Number(p.viralityScore ?? 0);
+  const viralityScore = Number(prediction?.viral_probability ?? 0) * 100;
 
-  const confidence = Number(p.confidence ?? 0);
+  const report = recommendationReport;
 
-  const engagementProbability = Number(
-    p.engagementProbability ?? 0
-  );
+  const captionAnalysis = report?.caption_analysis;
+  const suggestedHashtags = report?.suggested_hashtags;
+  const postingTime = report?.posting_time;
+  const engagement = report?.engagement_analysis ?? null; // null = no post-publish data supplied
+  const imageAnalysis = report?.image_analysis;
+  const topImprovements = report?.top_improvements ?? [];
+  const explainableAI = report?.explainable_ai ?? [];
+  const strengths = report?.strengths ?? [];
+  const weaknesses = report?.weaknesses ?? [];
+  const aiCoach = report?.ai_content_coach;
 
-  // ---------------------------------------------------------
-  // REAL BACKEND RECOMMENDATION REPORT
-  // ---------------------------------------------------------
+  const gaugeDegrees = Math.min(Math.max(viralityScore, 0), 100) * 3.6;
 
-  const recommendationReport =
-    p.recommendationReport ?? {};
-
-  const aiContentCoach =
-    recommendationReport.ai_content_coach ?? {};
-
-  const reportEngagement =
-    recommendationReport.engagement_analysis ?? {};
-
-  const reportPostingTime =
-    recommendationReport.posting_time ??
-    recommendationReport.posting_time_analysis ??
-    {};
-
-  const reportCaption =
-    recommendationReport.caption_analysis ?? {};
-
-  const reportHashtags =
-    recommendationReport.hashtag_analysis ??
-    recommendationReport.suggested_hashtags ??
-    {};
-
-  const reportExplainability =
-    recommendationReport.explainability ?? {};
-
-  const reportTopImprovements = Array.isArray(
-    recommendationReport.top_improvements
-  )
-    ? recommendationReport.top_improvements
-    : [];
-
-  const reportExplainableAI = Array.isArray(
-    recommendationReport.explainable_ai
-  )
-    ? recommendationReport.explainable_ai
-    : [];
-
-  // ---------------------------------------------------------
-  // AI CONTENT COACH
-  // ---------------------------------------------------------
-
-  const currentVirality =
-    typeof aiContentCoach?.current_virality === "string"
-      ? aiContentCoach.current_virality
-      : `${viralityScore.toFixed(1)}%`;
-
-  const aiCoachMessage =
-    typeof aiContentCoach?.message === "string"
-      ? aiContentCoach.message
-      : "Recommendations are based on the supplied inputs.";
-
-  // ---------------------------------------------------------
-  // REACH FORECAST
-  // ---------------------------------------------------------
-
-  const reachForecast =
-    typeof p.reachForecast === "string"
-      ? p.reachForecast
-      : "Not available";
-
-  // ---------------------------------------------------------
-  // SAFE DISPLAY HELPERS
-  // ---------------------------------------------------------
-
-  const getDisplayText = (
-    value: any,
-    fallback = ""
-  ): string => {
-    if (typeof value === "string") {
-      return value;
-    }
-
-    if (
-      typeof value === "number" ||
-      typeof value === "boolean"
-    ) {
-      return String(value);
-    }
-
-    if (!value || typeof value !== "object") {
-      return fallback;
-    }
-
-    if (typeof value.message === "string") {
-      return value.message;
-    }
-
-    if (typeof value.reason === "string") {
-      return value.reason;
-    }
-
-    if (typeof value.description === "string") {
-      return value.description;
-    }
-
-    if (typeof value.text === "string") {
-      return value.text;
-    }
-
-    if (typeof value.title === "string") {
-      return value.title;
-    }
-
-    return fallback;
+  const handleApply = (key: string, applyFn: () => void) => {
+    applyFn();
+    setAppliedKeys((prev) => new Set(prev).add(key));
   };
 
-  // ---------------------------------------------------------
-  // SAFE ARRAYS
-  // ---------------------------------------------------------
-
-  const oldExplainableAI: string[] =
-    Array.isArray(p.explainableAI)
-      ? p.explainableAI
-          .map((item: any) =>
-            getDisplayText(item)
-          )
-          .filter(Boolean)
-      : [];
-
-  /*
-    The new backend explainable_ai can contain objects.
-    Convert every item into a safe string before rendering.
-  */
-  const safeExplainableAI: string[] =
-    reportExplainableAI
-      .map((item: any) => {
-        if (typeof item === "string") {
-          return item;
-        }
-
-        if (item?.name && item?.reason) {
-          return `${item.name}: ${item.reason}`;
-        }
-
-        if (item?.title && item?.reason) {
-          return `${item.title}: ${item.reason}`;
-        }
-
-        if (item?.description) {
-          return item.description;
-        }
-
-        if (item?.reason) {
-          return item.reason;
-        }
-
-        if (item?.message) {
-          return item.message;
-        }
-
-        if (item?.text) {
-          return item.text;
-        }
-
-        return "";
-      })
-      .filter(Boolean);
-
-  /*
-    Use the new backend explainable AI first.
-    Fall back to the older prediction structure.
-  */
-  const explainableAI: string[] =
-    safeExplainableAI.length > 0
-      ? safeExplainableAI
-      : oldExplainableAI;
-
-  // ---------------------------------------------------------
-  // HASHTAGS
-  // ---------------------------------------------------------
-
-  const backendRecommendedHashtags =
-    Array.isArray(
-      reportHashtags?.recommended
-    )
-      ? reportHashtags.recommended
-      : [];
-
-  const oldHashtags: string[] =
-    Array.isArray(p.hashtagIntelligence)
-      ? p.hashtagIntelligence
-          .map((tag: any) =>
-            getDisplayText(tag)
-          )
-          .filter(Boolean)
-      : [];
-
-  const hashtags: string[] =
-    backendRecommendedHashtags.length > 0
-      ? backendRecommendedHashtags
-          .map((tag: any) =>
-            getDisplayText(tag)
-          )
-          .filter(Boolean)
-      : oldHashtags;
-
-  // ---------------------------------------------------------
-  // SUGGESTED HOOKS
-  // ---------------------------------------------------------
-
-  const hooks: string[] =
-    Array.isArray(p.suggestedHooks)
-      ? p.suggestedHooks
-          .map((hook: any) =>
-            getDisplayText(hook)
-          )
-          .filter(Boolean)
-      : [];
-
-  // ---------------------------------------------------------
-  // TEXTUAL FEATURES
-  // ---------------------------------------------------------
-
-  const textualFeatures =
-    p.textualFeatures ?? {};
-
-  const semanticKeywords = Array.isArray(
-    textualFeatures.semanticKeywords
-  )
-    ? textualFeatures.semanticKeywords
-    : [];
-
-  const sentiment =
-    textualFeatures.sentiment ?? {};
-
-  const sentimentLabel =
-    sentiment.label ?? "Not available";
-
-  const compoundScore = Number(
-    sentiment.compoundScore ?? 0
-  );
-
-  const positiveScore = Number(
-    sentiment.positiveScore ?? 0
-  );
-
-  const neutralScore = Number(
-    sentiment.neutralScore ?? 0
-  );
-
-  const negativeScore = Number(
-    sentiment.negativeScore ?? 0
-  );
-
-  // ---------------------------------------------------------
-  // CAPTION ANALYSIS FROM BACKEND
-  // ---------------------------------------------------------
-
-  const captionWordCount = Number(
-    reportCaption?.word_count ?? 0
-  );
-
-  const captionCharCount = Number(
-    reportCaption?.char_count ?? 0
-  );
-
-  const captionScore = Number(
-    reportCaption?.current_score ?? 0
-  );
-
-  const captionRecommendedLength =
-    reportCaption?.recommended_length ??
-    "18–30 words";
-
-  // ---------------------------------------------------------
-  // VISUAL FEATURES
-  // ---------------------------------------------------------
-
-  const visualFeatures =
-    p.visualFeatures ?? {};
-
-  const dominantColors = Array.isArray(
-    visualFeatures.dominantColors
-  )
-    ? visualFeatures.dominantColors
-    : [];
-
-  const detectedObjects = Array.isArray(
-    visualFeatures.detectedObjects
-  )
-    ? visualFeatures.detectedObjects
-    : [];
-
-  const clipEmbeddingDimension =
-    visualFeatures.clipEmbeddingDimension ??
-    "N/A";
-
-  // ---------------------------------------------------------
-  // METADATA
-  // ---------------------------------------------------------
-
-  const metadataFeatures =
-    p.metadataFeatures ?? {};
-
-  const temporalStamp =
-    metadataFeatures.temporalStamp ?? {};
-
-  const engagementVelocity =
-    metadataFeatures.engagementVelocity ?? {};
-
-  const userProfiler =
-    metadataFeatures.userProfiler ?? {};
-
-  // ---------------------------------------------------------
-  // PIPELINE
-  // ---------------------------------------------------------
-
-  const pipelineBreakdown =
-    p.pipelineBreakdown ?? {};
-
-  const ensembleModels =
-    pipelineBreakdown.ensembleModels ?? {};
-
-  // ---------------------------------------------------------
-  // ENGAGEMENT HELPERS
-  // ---------------------------------------------------------
-
-  /*
-    Backend engagement_analysis can return values as numbers
-    or nested objects. This helper safely extracts them.
-  */
-  const getEngagementValue = (
-    metric: any,
-    fallback = 0
-  ): number => {
-    if (
-      typeof metric === "number" &&
-      Number.isFinite(metric)
-    ) {
-      return metric;
-    }
-
-    if (
-      typeof metric === "string" &&
-      metric.trim() !== ""
-    ) {
-      const parsed = Number(metric);
-
-      if (!Number.isNaN(parsed)) {
-        return parsed;
-      }
-    }
-
-    if (metric && typeof metric === "object") {
-      const possibleValues = [
-        metric.current,
-        metric.value,
-        metric.count,
-        metric.total,
-        metric.number,
-        metric.amount,
-      ];
-
-      for (const value of possibleValues) {
-        if (
-          typeof value === "number" &&
-          Number.isFinite(value)
-        ) {
-          return value;
-        }
-
-        if (
-          typeof value === "string" &&
-          value.trim() !== ""
-        ) {
-          const parsed = Number(value);
-
-          if (!Number.isNaN(parsed)) {
-            return parsed;
-          }
-        }
-      }
-    }
-
-    return fallback;
-  };
-
-  // ---------------------------------------------------------
-  // REAL ENGAGEMENT DATA
-  // ---------------------------------------------------------
-
-  const followerCount = getEngagementValue(
-    reportEngagement?.followers ??
-      reportEngagement?.follower_count ??
-      p.metadataFeatures?.followerCount,
-    0
-  );
-
-  const reach = getEngagementValue(
-    reportEngagement?.reach,
-    0
-  );
-
-  const impressions = getEngagementValue(
-    reportEngagement?.impressions,
-    0
-  );
-
-  const likes = getEngagementValue(
-    reportEngagement?.likes ??
-      reportEngagement?.early_likes ??
-      p.metadataFeatures?.earlyLikes,
-    0
-  );
-
-  const comments = getEngagementValue(
-    reportEngagement?.comments ??
-      reportEngagement?.early_comments ??
-      p.metadataFeatures?.earlyComments,
-    0
-  );
-
-  const shares = getEngagementValue(
-    reportEngagement?.shares ??
-      reportEngagement?.early_shares ??
-      p.metadataFeatures?.earlyShares,
-    0
-  );
-
-  const saves = getEngagementValue(
-    reportEngagement?.saves ??
-      p.metadataFeatures?.saves,
-    0
-  );
-
-  // ---------------------------------------------------------
-  // POSTING TIME FROM BACKEND
-  // ---------------------------------------------------------
-
-  const backendCurrentHour =
-    reportPostingTime?.current_hour ??
-    reportPostingTime?.current_time ??
-    temporalStamp.publishTimeUtc ??
-    "Not available";
-
-  const recommendedWindow =
-    reportPostingTime?.recommended_window ??
-    "Recommended publishing window";
-
-  const postingPerformance =
-    reportPostingTime?.performance ??
-    "Not available";
-
-  const postingReason =
-    reportPostingTime?.reason ??
-    "";
-
-  // ---------------------------------------------------------
-  // DYNAMIC STRENGTHS
-  // ---------------------------------------------------------
-
-  const backendStrengths: string[] =
-    Array.isArray(recommendationReport?.strengths)
-      ? recommendationReport.strengths
-          .map((item: any) =>
-            getDisplayText(item)
-          )
-          .filter(Boolean)
-      : [];
-
-  const strengths: string[] =
-    backendStrengths.length > 0
-      ? backendStrengths
-      : [];
-
-  if (strengths.length === 0) {
-    if (viralityScore >= 65) {
-      strengths.push(
-        "Strong overall virality potential detected."
-      );
-    }
-
-    if (engagementProbability >= 60) {
-      strengths.push(
-        "High predicted engagement probability."
-      );
-    }
-
-    if (confidence >= 80) {
-      strengths.push(
-        "Prediction model has high confidence in this result."
-      );
-    }
-
-    if (semanticKeywords.length > 0) {
-      strengths.push(
-        "Caption contains identifiable semantic keywords."
-      );
-    }
-
-    if (detectedObjects.length > 0) {
-      strengths.push(
-        "Visual analysis detected meaningful focal elements."
-      );
-    }
-
-    if (
-      temporalStamp.optimalWindowScore &&
-      Number(
-        temporalStamp.optimalWindowScore
-      ) >= 80
-    ) {
-      strengths.push(
-        "Selected publishing window is favorable."
-      );
-    }
-  }
-
-  if (strengths.length === 0) {
-    strengths.push(
-      "Prediction completed successfully."
-    );
-  }
-
-  // ---------------------------------------------------------
-  // DYNAMIC WEAKNESSES
-  // ---------------------------------------------------------
-
-  const backendWeaknesses: string[] =
-    Array.isArray(recommendationReport?.weaknesses)
-      ? recommendationReport.weaknesses
-          .map((item: any) =>
-            getDisplayText(item)
-          )
-          .filter(Boolean)
-      : [];
-
-  const weaknesses: string[] =
-    backendWeaknesses.length > 0
-      ? backendWeaknesses
-      : [];
-
-  if (weaknesses.length === 0) {
-    if (viralityScore < 60) {
-      weaknesses.push(
-        "Overall virality score is below the strong-performance range."
-      );
-    }
-
-    if (engagementProbability < 60) {
-      weaknesses.push(
-        "Predicted engagement probability could be improved."
-      );
-    }
-
-    if (confidence < 75) {
-      weaknesses.push(
-        "Model confidence is moderate; richer input data may improve reliability."
-      );
-    }
-
-    if (hashtags.length < 3) {
-      weaknesses.push(
-        "Use more targeted hashtags to improve content discoverability."
-      );
-    }
-
-    if (semanticKeywords.length === 0) {
-      weaknesses.push(
-        "The caption contains limited identifiable semantic keywords."
-      );
-    }
-
-    if (detectedObjects.length === 0) {
-      weaknesses.push(
-        "Visual analysis found limited identifiable objects."
-      );
-    }
-  }
-
-  if (weaknesses.length === 0) {
-    weaknesses.push(
-      "No major weaknesses were detected by the current analysis."
-    );
-  }
-
-  // ---------------------------------------------------------
-  // TOP IMPROVEMENTS
-  // ---------------------------------------------------------
-
-  const improvements =
-    reportTopImprovements.length > 0
-      ? reportTopImprovements
-          .slice(0, 5)
-          .map(
-            (item: any, index: number) => ({
-              title:
-                getDisplayText(
-                  item?.title,
-                  `Improvement ${index + 1}`
-                ),
-
-              description:
-                getDisplayText(
-                  item?.why,
-                  getDisplayText(
-                    item?.description,
-                    getDisplayText(
-                      item?.how,
-                      "Improve this area to increase content performance."
-                    )
-                  )
-                ),
-
-              impact:
-                getDisplayText(
-                  item?.impact,
-                  getDisplayText(
-                    item?.expected_improvement,
-                    "+5% to +10%"
-                  )
-                ),
-            })
-          )
-      : [
-          {
-            title: "Strengthen the Caption",
-            description:
-              explainableAI[0] ??
-              "Create a stronger narrative opening and communicate the main value clearly.",
-            impact: "+10% to +20%",
-          },
-          {
-            title: "Improve Early Engagement",
-            description:
-              explainableAI[3] ??
-              "Use a clear call-to-action to encourage comments, shares and saves.",
-            impact: "+8% to +15%",
-          },
-          {
-            title: "Add Relevant Hashtags",
-            description:
-              explainableAI[1] ??
-              "Use focused niche hashtags instead of broad generic hashtags.",
-            impact: "+5% to +12%",
-          },
-        ];
-
-  // ---------------------------------------------------------
-  // GAUGE
-  // ---------------------------------------------------------
-
-  const gaugeDegrees =
-    Math.min(
-      Math.max(viralityScore, 0),
-      100
-    ) * 3.6;
-
-  // ---------------------------------------------------------
-  // RENDER
-  // ---------------------------------------------------------
+  const captionWeaknesses = weaknesses.filter(isCaptionWeakness);
+  const otherWeaknesses = weaknesses
+    .map((w, i) => ({ w, i }))
+    .filter(({ w }) => !isCaptionWeakness(w));
 
   return (
     <section className="mt-8 space-y-5">
 
-      {/* =====================================================
-          HEADER
-      ====================================================== */}
-
+      {/* HEADER */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <span className="text-xl">✨</span>
-
           <h2 className="text-lg font-bold text-white">
             Multimodal Virality Predictor
           </h2>
         </div>
-
         <p className="text-xs text-slate-400">
-          Explainable post analysis with multimodal analysis,
-          performance forecasting and actionable AI recommendations.
+          Real prediction from the trained ML model, with recommendations
+          based on your actual input.
         </p>
       </div>
 
-      {/* =====================================================
-          TOP SECTION
-      ====================================================== */}
-
+      {/* SCORE + AI REASONING */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
 
-        {/* VIRALITY SCORE */}
-
         <div className="rounded-xl border border-slate-800 bg-[#111119] p-6">
-
           <div className="flex flex-col items-center justify-center">
-
             <div
               className="relative flex h-32 w-32 items-center justify-center rounded-full"
               style={{
-                background: `conic-gradient(
-                  #ef4444 ${gaugeDegrees}deg,
-                  #262632 ${gaugeDegrees}deg
-                )`,
+                background: `conic-gradient(${getScoreColor(viralityScore)} ${gaugeDegrees}deg, #262632 ${gaugeDegrees}deg)`,
               }}
             >
-
               <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-[#111119]">
-
                 <span className="text-3xl font-bold text-white">
                   {viralityScore.toFixed(1)}
                 </span>
-
                 <span className="text-[8px] uppercase tracking-widest text-slate-500">
                   VIRALITY SCORE
                 </span>
-
               </div>
-
             </div>
 
-            <div
-              className={`mt-3 text-xs font-bold ${getScoreClass(
-                viralityScore
-              )}`}
-            >
-              {getScoreLabel(viralityScore)}
-            </div>
+            <div className={`mt-3 text-xs font-bold ${getScoreClass(viralityScore)}`}>
+  {getScoreLabel(viralityScore)}
+</div>
 
-            <div className="mt-1 text-[10px] text-slate-500">
-              Virality {viralityScore.toFixed(0)}%
-              {" • "}
-              Confidence {confidence.toFixed(0)}%
-            </div>
-
+<div
+  className={`mt-2 flex items-center gap-1.5 rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${
+    viralityScore >= 50
+      ? "border-emerald-700/50 bg-emerald-950/30 text-emerald-300"
+      : "border-red-700/50 bg-red-950/30 text-red-300"
+  }`}
+>
+  <span
+    className={`h-1.5 w-1.5 rounded-full ${
+      viralityScore >= 50 ? "bg-emerald-400" : "bg-red-400"
+    }`}
+  />
+  {viralityScore >= 50 ? "Predicted Viral" : "Predicted Not Viral"}
+</div>
           </div>
-
         </div>
 
-        {/* AI REASONING */}
-
         <div className="xl:col-span-2 rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-          <h3 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400">
-            AI Reasoning
-          </h3>
-
-          <div className="space-y-3 text-xs leading-6 text-slate-300">
-
-            {typeof recommendationReport?.ai_reasoning ===
-              "string" ? (
-              <div className="border-b border-slate-800 pb-2">
-                {recommendationReport.ai_reasoning}
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-purple-400">
+              AI Reasoning
+            </h3>
+            {report && (
+              <div className="flex flex-wrap justify-end gap-1.5">
+                {report.category && (
+                  <span className="rounded-full border border-slate-700/50 bg-slate-900/40 px-2 py-0.5 text-[9px] capitalize text-slate-400">
+                    {report.category}
+                  </span>
+                )}
+                {report.platform && (
+                  <span className="rounded-full border border-slate-700/50 bg-slate-900/40 px-2 py-0.5 text-[9px] text-slate-400">
+                    {report.platform}
+                  </span>
+                )}
+                {report.media_type && (
+                  <span className="rounded-full border border-slate-700/50 bg-slate-900/40 px-2 py-0.5 text-[9px] capitalize text-slate-400">
+                    {report.media_type}
+                  </span>
+                )}
               </div>
-            ) : null}
-
-            {explainableAI.length > 0 ? (
-              explainableAI.map(
-                (
-                  reason: string,
-                  index: number
-                ) => (
-                  <div
-                    key={index}
-                    className="border-b border-slate-800 pb-2 last:border-b-0"
-                  >
-                    {reason}
-                  </div>
-                )
-              )
-            ) : (
-              !recommendationReport?.ai_reasoning && (
-                <p>
-                  The AI analysis has completed successfully.
-                </p>
-              )
             )}
-
           </div>
-
+          <div className="text-xs leading-6 text-slate-300">
+            {report?.ai_reasoning || "No reasoning available yet."}
+          </div>
         </div>
 
       </div>
 
-      {/* =====================================================
-          STRENGTHS + WEAKNESSES
-      ====================================================== */}
-
+      {/* STRENGTHS + WEAKNESSES */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-        {/* STRENGTHS */}
-
         <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
           <h3 className="mb-4 text-[10px] font-bold uppercase tracking-widest text-emerald-400">
             Strengths
           </h3>
-
           <div className="space-y-3">
-
-            {strengths.map(
-              (
-                strength: string,
-                index: number
-              ) => (
-                <div
-                  key={index}
-                  className="flex gap-2 text-xs text-slate-300"
-                >
-
-                  <span className="text-emerald-400">
-                    ✓
-                  </span>
-
-                  <span>{strength}</span>
-
+            {strengths.length > 0 ? (
+              strengths.map((s, i) => (
+                <div key={i} className="flex gap-2 text-xs text-slate-300">
+                  <span className="text-emerald-400">✓</span>
+                  <span>{s}</span>
                 </div>
-              )
+              ))
+            ) : (
+              <p className="text-xs text-slate-500">No strengths identified yet.</p>
             )}
-
           </div>
-
         </div>
 
-        {/* WEAKNESSES */}
-
         <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
           <h3 className="mb-4 text-[10px] font-bold uppercase tracking-widest text-yellow-400">
             Weaknesses
           </h3>
-
           <div className="space-y-3">
+            {weaknesses.length > 0 ? (
+              <>
+                {/* Caption-related weaknesses: grouped under one shared fix,
+                    since a single rewrite resolves all of them at once. */}
+                {captionWeaknesses.length > 0 && (() => {
+                  const key = "caption-group";
+                  const applied = appliedKeys.has(key);
+                  const suggested = captionAnalysis?.ai_suggested_caption;
 
-            {weaknesses.map(
-              (
-                weakness: string,
-                index: number
-              ) => (
-                <div
-                  key={index}
-                  className="flex gap-2 text-xs text-slate-300"
-                >
+                  return (
+                    <div className="space-y-1.5">
+                      {captionWeaknesses.map((w, i) => (
+                        <div key={i} className="flex gap-2 text-xs text-slate-300">
+                          <span className="text-red-400 shrink-0">✕</span>
+                          <span>{w}</span>
+                        </div>
+                      ))}
 
-                  <span className="text-red-400">
-                    ✕
-                  </span>
+                      {suggested && onInputChange && predictionInput && (
+                        <div className="ml-5 rounded-lg bg-[#191923] border border-slate-800 p-2.5">
+                          <p className="text-[9px] uppercase text-slate-500 mb-1">
+                            One rewrite fixes all {captionWeaknesses.length} of the above
+                          </p>
+                          <p className="text-[11px] leading-5 text-emerald-300 whitespace-pre-line">
+                            {suggested}
+                          </p>
+                          <button
+                            type="button"
+                            disabled={applied}
+                            onClick={() =>
+                              handleApply(key, () =>
+                                onInputChange((prev) => ({ ...prev, caption: suggested }))
+                              )
+                            }
+                            className={`mt-2 rounded-md px-2.5 py-1 text-[10px] font-semibold transition ${
+                              applied
+                                ? "bg-emerald-950/40 text-emerald-400 cursor-default"
+                                : "bg-purple-600 hover:bg-purple-500 text-white"
+                            }`}
+                          >
+                            {applied ? "✓ Applied" : "Apply Suggestion"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
-                  <span>{weakness}</span>
+                {/* Non-caption weaknesses: unchanged, one suggestion each */}
+                {otherWeaknesses.map(({ w, i }) => {
+                  const suggestion = getSuggestion(
+                    w,
+                    suggestedHashtags,
+                    postingTime,
+                    predictionInput,
+                    onInputChange
+                  );
+                  const key = `w-${i}`;
+                  const applied = appliedKeys.has(key);
 
-                </div>
-              )
+                  return (
+                    <div key={key} className="space-y-1.5">
+                      <div className="flex gap-2 text-xs text-slate-300">
+                        <span className="text-red-400 shrink-0">✕</span>
+                        <span>{w}</span>
+                      </div>
+
+                      {suggestion && (
+                        <div className="ml-5 rounded-lg bg-[#191923] border border-slate-800 p-2.5">
+                          <p className="text-[11px] leading-5 text-emerald-300 whitespace-pre-line">
+                            {suggestion.text}
+                          </p>
+                          <button
+                            type="button"
+                            disabled={applied}
+                            onClick={() => handleApply(key, suggestion.apply)}
+                            className={`mt-2 rounded-md px-2.5 py-1 text-[10px] font-semibold transition ${
+                              applied
+                                ? "bg-emerald-950/40 text-emerald-400 cursor-default"
+                                : "bg-purple-600 hover:bg-purple-500 text-white"
+                            }`}
+                          >
+                            {applied ? "✓ Applied" : "Apply Suggestion"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <p className="text-xs text-slate-500">No weaknesses identified yet.</p>
             )}
-
           </div>
-
         </div>
 
       </div>
 
-      {/* =====================================================
-          CONTENT COACH
-      ====================================================== */}
-
-      <div className="rounded-xl border border-purple-800/50 bg-[#171329] p-5">
-
-        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400">
-          AI Content Coach
-        </h3>
-
-        <p className="text-xs leading-6 text-slate-300">
-          {aiCoachMessage}
-        </p>
-
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-
-          <div className="rounded-lg bg-[#111119] p-3">
-
-            <div className="text-[9px] uppercase text-slate-500">
-              Engagement
+      {/* AI CONTENT COACH */}
+      {aiCoach && (
+        <div className="rounded-xl border border-purple-800/50 bg-[#171329] p-5">
+          <h3 className="mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400">
+            AI Content Coach
+          </h3>
+          <p className="text-xs leading-6 text-slate-300">{aiCoach.message}</p>
+          <div className="mt-4 rounded-lg bg-[#111119] p-3 inline-block">
+            <div className="text-[9px] uppercase text-slate-500">Current Virality</div>
+            <div className="mt-1 text-lg font-bold text-emerald-400">
+              {aiCoach.current_virality}
             </div>
-
-            <div className="mt-1 text-lg font-bold text-cyan-400">
-              {engagementProbability}%
-            </div>
-
           </div>
-
-          <div className="rounded-lg bg-[#111119] p-3">
-
-            <div className="text-[9px] uppercase text-slate-500">
-              Confidence
-            </div>
-
-            <div className="mt-1 text-lg font-bold text-purple-400">
-              {confidence}%
-            </div>
-
-          </div>
-
-          <div className="rounded-lg bg-[#111119] p-3">
-
-            <div className="text-[9px] uppercase text-slate-500">
-              Current Virality
-            </div>
-
-            <div className="mt-1 text-sm font-bold text-emerald-400">
-              {currentVirality}
-            </div>
-
-          </div>
-
         </div>
+      )}
 
-      </div>
-
-      {/* =====================================================
-          CAPTION ANALYSIS
-      ====================================================== */}
-
-      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-        <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
-          Caption Analysis
-        </h3>
-
-        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-          {/* SEMANTIC KEYWORDS */}
-
-          <div>
-
-            <p className="mb-3 text-[9px] uppercase text-slate-500">
-              Semantic Keywords
-            </p>
-
-            <div className="space-y-2">
-
-              {semanticKeywords.length > 0 ? (
-                semanticKeywords.map(
-                  (
-                    item: any,
-                    index: number
-                  ) => (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between rounded-lg bg-[#191923] px-3 py-2"
-                    >
-
-                      <span className="text-xs text-slate-200">
-                        {getDisplayText(
-                          item?.keyword,
-                          "keyword"
-                        )}
-                      </span>
-
-                      <span className="text-xs font-bold text-purple-400">
-                        {Number(
-                          item?.weight ?? 0
-                        ).toFixed(2)}
-                      </span>
-
-                    </div>
-                  )
-                )
-              ) : (
-                <p className="text-xs text-slate-500">
-                  {reportCaption?.current_caption
-                    ? `Caption: ${reportCaption.current_caption}`
-                    : "No semantic keywords detected."}
-                </p>
-              )}
-
-            </div>
-
-            {/* CAPTION METADATA */}
-
-            {reportCaption?.current_caption && (
-              <div className="mt-4 rounded-lg bg-[#191923] p-3">
-
-                <div className="text-[9px] uppercase text-slate-500">
-                  Current Caption
-                </div>
-
-                <p className="mt-2 text-xs leading-5 text-slate-300">
-                  {reportCaption.current_caption}
-                </p>
-
-                <div className="mt-3 grid grid-cols-3 gap-2">
-
-                  <div>
-                    <div className="text-[9px] text-slate-500">
-                      Words
-                    </div>
-
-                    <div className="text-sm font-bold text-white">
-                      {captionWordCount}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-[9px] text-slate-500">
-                      Characters
-                    </div>
-
-                    <div className="text-sm font-bold text-white">
-                      {captionCharCount}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-[9px] text-slate-500">
-                      Score
-                    </div>
-
-                    <div className="text-sm font-bold text-cyan-400">
-                      {captionScore}/100
-                    </div>
-                  </div>
-
-                </div>
-
-                <div className="mt-2 text-[9px] text-slate-500">
-                  Recommended length:{" "}
-                  {captionRecommendedLength}
-                </div>
-
-              </div>
-            )}
-
-          </div>
-
-          {/* SENTIMENT */}
-
-          <div>
-
-            <p className="mb-3 text-[9px] uppercase text-slate-500">
-              Sentiment Analysis
-            </p>
-
-            <div className="rounded-xl bg-[#191923] p-4">
-
-              <div className="flex items-center justify-between">
-
-                <span className="text-xs text-slate-300">
-                  {sentimentLabel}
-                </span>
-
-                <span className="text-sm font-bold text-purple-400">
-                  {compoundScore.toFixed(2)}
-                </span>
-
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-2">
-
-                <div>
-                  <div className="text-[9px] text-slate-500">
-                    Positive
-                  </div>
-
-                  <div className="text-sm font-bold text-emerald-400">
-                    {positiveScore}%
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-[9px] text-slate-500">
-                    Neutral
-                  </div>
-
-                  <div className="text-sm font-bold text-slate-300">
-                    {neutralScore}%
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-[9px] text-slate-500">
-                    Negative
-                  </div>
-
-                  <div className="text-sm font-bold text-red-400">
-                    {negativeScore}%
-                  </div>
-                </div>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-        {/* SUGGESTED HOOK */}
-
-        {hooks.length > 0 && (
-          <div className="mt-5">
-
-            <p className="mb-2 text-[9px] uppercase text-slate-500">
-              Suggested Hook
-            </p>
-
-            <div className="rounded-xl bg-[#191923] p-4">
-
-              <p className="text-xs leading-6 text-slate-300">
-                {hooks[0]}
-              </p>
-
-            </div>
-
-          </div>
-        )}
-
-      </div>
-
-      {/* =====================================================
-          SUGGESTED HASHTAGS + POSTING TIME
-      ====================================================== */}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-        {/* HASHTAGS */}
-
+      {/* CAPTION ANALYSIS */}
+      {captionAnalysis && (
         <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-pink-400">
-            Suggested Hashtags
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
+            Caption Analysis
           </h3>
 
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-4 rounded-lg bg-[#191923] p-3">
+            <div className="text-[9px] uppercase text-slate-500">Current Caption</div>
+            <p className="mt-2 text-xs leading-5 text-slate-300">
+              {captionAnalysis.current_caption || "(empty)"}
+            </p>
 
-            {hashtags.length > 0 ? (
-              hashtags.map(
-                (
-                  tag: string,
-                  index: number
-                ) => (
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-[9px] text-slate-500">Words</div>
+                <div className="text-sm font-bold text-white">
+                  {captionAnalysis.word_count}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-slate-500">Characters</div>
+                <div className="text-sm font-bold text-white">
+                  {captionAnalysis.char_count}
+                </div>
+              </div>
+              <div>
+                <div className="text-[9px] text-slate-500">Score</div>
+                <div className="text-sm font-bold text-cyan-400">
+                  {captionAnalysis.current_score}/100
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2 text-[9px] text-slate-500">
+              Recommended length: {captionAnalysis.recommended_length}
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge active={captionAnalysis.has_question} label="Has question" />
+              <Badge active={captionAnalysis.has_cta} label="Has CTA" />
+              <Badge active={captionAnalysis.has_emoji} label="Has emoji" />
+            </div>
+          </div>
+
+          {captionAnalysis.ai_suggested_caption && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[9px] uppercase text-slate-500">
+                  Suggested Rewrite
+                </p>
+                {onInputChange && predictionInput && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onInputChange((prev) => ({
+                        ...prev,
+                        caption: captionAnalysis.ai_suggested_caption,
+                      }))
+                    }
+                    className="rounded-md bg-purple-600 hover:bg-purple-500 px-2.5 py-1 text-[10px] font-semibold text-white transition"
+                  >
+                    Use This Caption
+                  </button>
+                )}
+              </div>
+              <div className="rounded-xl bg-[#191923] p-4">
+                <p className="text-xs leading-6 text-slate-300 whitespace-pre-line">
+                  {captionAnalysis.ai_suggested_caption}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* HASHTAGS + POSTING TIME */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {suggestedHashtags && (
+          <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-pink-400">
+                Suggested Hashtags
+              </h3>
+              {onInputChange && predictionInput && suggestedHashtags.recommended.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onInputChange((prev) => ({
+                      ...prev,
+                      hashtags: suggestedHashtags.recommended.join(", "),
+                      keywords: suggestedHashtags.recommended.join(", "),
+                    }))
+                  }
+                  className="rounded-md bg-purple-600 hover:bg-purple-500 px-2.5 py-1 text-[10px] font-semibold text-white transition"
+                >
+                  Use These
+                </button>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {suggestedHashtags.recommended.length > 0 ? (
+                suggestedHashtags.recommended.map((tag, i) => (
                   <span
-                    key={index}
+                    key={i}
                     className="rounded-md border border-pink-700/50 bg-pink-950/20 px-2 py-1 text-[10px] text-pink-300"
                   >
                     {tag}
                   </span>
-                )
-              )
-            ) : (
-              <span className="text-xs text-slate-500">
-                No hashtags generated.
+                ))
+              ) : (
+                <span className="text-xs text-slate-500">No hashtags generated.</span>
+              )}
+            </div>
+            {suggestedHashtags.reason && (
+              <p className="mt-3 text-[10px] leading-5 text-slate-500">
+                {suggestedHashtags.reason}
+              </p>
+            )}
+          </div>
+        )}
+
+        {postingTime && (
+          <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
+              Posting Time
+            </h3>
+            <div className="mt-4 flex items-center justify-between">
+              <div>
+                <div className="text-xl font-bold text-white">
+                  {postingTime.current_time}
+                </div>
+                <div className="mt-1 text-[10px] text-slate-500">
+                  {postingTime.recommended_window}
+                </div>
+              </div>
+              <div className="text-right">
+                <div
+                  className={`text-sm font-bold ${
+                    postingTime.performance === "Good"
+                      ? "text-emerald-400"
+                      : "text-yellow-400"
+                  }`}
+                >
+                  {postingTime.performance}
+                </div>
+              </div>
+            </div>
+            {postingTime.reason && (
+              <p className="mt-3 text-[10px] leading-5 text-slate-500">
+                {postingTime.reason}
+              </p>
+            )}
+          </div>
+        )}
+
+      </div>
+
+      {/* ENGAGEMENT ANALYSIS -- forecast panel. Real values render as-is;
+          anything the user left blank is filled with a documented estimate
+          derived from follower count + virality score, and clearly tagged
+          "Estimated" so it's never mistaken for tracked analytics. */}
+      {engagement ? (
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
+              Post-Publish Engagement Analysis
+            </h3>
+            {engagement.has_estimated_values && (
+              <span className="text-[9px] rounded-full bg-cyan-950/40 border border-cyan-700/50 text-cyan-300 px-2 py-0.5 whitespace-nowrap">
+                Includes forecasted values
               </span>
             )}
-
           </div>
 
-          {reportHashtags?.reason && (
-            <p className="mt-3 text-[10px] leading-5 text-slate-500">
-              {getDisplayText(
-                reportHashtags.reason
-              )}
+          {engagement.estimate_note && (
+            <p className="mt-2 text-[10px] leading-5 text-slate-500">
+              {engagement.estimate_note}
             </p>
           )}
 
+          <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <MetricCard title="Followers" value={formatNumber(engagement.followers)} label="Audience Size" />
+            <MetricCard
+              title="Likes"
+              value={formatNumber(engagement.likes.value)}
+              label={engagement.likes.status}
+              estimated={engagement.likes.estimated}
+            />
+            <MetricCard
+              title="Comments"
+              value={formatNumber(engagement.comments.value)}
+              label={engagement.comments.status}
+              estimated={engagement.comments.estimated}
+            />
+            <MetricCard
+              title="Shares"
+              value={formatNumber(engagement.shares.value)}
+              label={engagement.shares.status}
+              estimated={engagement.shares.estimated}
+            />
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <MetricCard
+              title="Saves"
+              value={formatNumber(engagement.saves.value)}
+              label={engagement.saves.status}
+              estimated={engagement.saves.estimated}
+            />
+            <MetricCard
+              title="Reach"
+              value={formatNumber(engagement.reach)}
+              label="Current Reach"
+              estimated={engagement.reach_estimated}
+            />
+            <MetricCard
+              title="Impressions"
+              value={formatNumber(engagement.impressions)}
+              label="Total Impressions"
+              estimated={engagement.impressions_estimated}
+            />
+            <MetricCard
+              title="Engagement Rate"
+              value={`${engagement.engagement_rate.toFixed(2)}%`}
+              label={
+                engagement.engagement_rate_basis === "followers"
+                  ? "Relative to followers"
+                  : engagement.engagement_rate_basis === "impressions"
+                  ? "Relative to impressions"
+                  : engagement.engagement_rate_basis === "reach"
+                  ? "Relative to reach"
+                  : "No data available"
+              }
+            />
+          </div>
+
+          <div className="mt-5">
+            <h4 className="mb-2 text-[9px] font-bold uppercase tracking-widest text-amber-400">
+              Recommended Actions
+            </h4>
+            <div className="space-y-2">
+              {engagement.recommended_actions.map((action, i) => (
+                <div key={i} className="flex gap-2 text-xs text-slate-300">
+                  <span className="text-amber-400 shrink-0">→</span>
+                  <span>{action}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-
-        {/* POSTING TIME */}
-
+      ) : (
         <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
+            Post-Publish Engagement Analysis
+          </h3>
+          <p className="mt-3 text-xs text-slate-500">
+            Add your follower count (or any early likes/comments/shares) to see a
+            forecasted engagement breakdown for this post.
+          </p>
+        </div>
+      )}
 
-          <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
-            Posting Time
+      {/* IMAGE ANALYSIS */}
+      {imageAnalysis && (
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">
+            Image Analysis
           </h3>
 
-          <div className="mt-4 flex items-center justify-between">
-
-            <div>
-
-              <div className="text-xl font-bold text-white">
-                {backendCurrentHour}
+          {imageAnalysis.brightness !== undefined ? (
+            <>
+              <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <MetricCard
+                  title="Brightness"
+                  value={imageAnalysis.brightness}
+                  label={imageAnalysis.brightness_label || ""}
+                />
+                <MetricCard
+                  title="Contrast"
+                  value={imageAnalysis.contrast ?? "N/A"}
+                  label="Brightness spread"
+                />
+                <MetricCard
+                  title="Saturation"
+                  value={imageAnalysis.saturation ?? "N/A"}
+                  label={imageAnalysis.saturation_label || ""}
+                />
+                <MetricCard
+                  title="Colorfulness"
+                  value={imageAnalysis.colorfulness ?? "N/A"}
+                  label="Hasler-Susstrunk metric"
+                />
               </div>
 
-              <div className="mt-1 text-[10px] text-slate-500">
-                {recommendedWindow}
+              <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <MetricCard
+                  title="Sharpness"
+                  value={imageAnalysis.sharpness ?? "N/A"}
+                  label={imageAnalysis.detail_label || ""}
+                />
+                <MetricCard
+                  title="Tone"
+                  value={imageAnalysis.tone ?? "N/A"}
+                  label="Warm vs. cool"
+                />
+                <MetricCard
+                  title="Composition"
+                  value={imageAnalysis.composition ?? "N/A"}
+                  label="Orientation"
+                />
+                <MetricCard
+                  title="Aspect Ratio"
+                  value={imageAnalysis.aspect_ratio ?? "N/A"}
+                  label="Width / height"
+                />
               </div>
-
-            </div>
-
-            <div className="text-right">
-
-              <div
-                className={`text-sm font-bold ${
-                  postingPerformance === "Good" ||
-                  postingPerformance === "Excellent" ||
-                  Number(
-                    temporalStamp.optimalWindowScore ?? 0
-                  ) >= 70
-                    ? "text-emerald-400"
-                    : "text-yellow-400"
-                }`}
-              >
-                {postingPerformance}
-              </div>
-
-              <div className="text-[9px] text-slate-500">
-                Window Score{" "}
-                {temporalStamp.optimalWindowScore ??
-                  0}
-              </div>
-
-            </div>
-
-          </div>
-
-          {postingReason && (
-            <p className="mt-3 text-[10px] leading-5 text-slate-500">
-              {getDisplayText(postingReason)}
-            </p>
-          )}
-
+            </>
+          ) : null}
         </div>
+      )}
 
-      </div>
-
-      {/* =====================================================
-          ENGAGEMENT ANALYSIS
-      ====================================================== */}
-
-      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-        <h3 className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
-          Engagement Analysis
-        </h3>
-
-        {/* REAL INPUT ENGAGEMENT */}
-
-        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
-
-          <MetricCard
-            title="Followers"
-            value={formatNumber(
-              followerCount
-            )}
-            label="Audience Size"
-          />
-
-          <MetricCard
-            title="Initial Likes"
-            value={formatNumber(likes)}
-            label="Early Engagement"
-          />
-
-          <MetricCard
-            title="Comments"
-            value={formatNumber(comments)}
-            label="Early Comments"
-          />
-
-          <MetricCard
-            title="Shares"
-            value={formatNumber(shares)}
-            label="Early Shares"
-          />
-
-        </div>
-
-        {/* ADDITIONAL ENGAGEMENT DATA */}
-
-        <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
-
-          <MetricCard
-            title="Saves"
-            value={formatNumber(saves)}
-            label="Saved Content"
-          />
-
-          <MetricCard
-            title="Reach"
-            value={formatNumber(reach)}
-            label="Current Reach"
-          />
-
-          <MetricCard
-            title="Impressions"
-            value={formatNumber(
-              impressions
-            )}
-            label="Total Impressions"
-          />
-
-          <MetricCard
-            title="Engagement Probability"
-            value={`${engagementProbability}%`}
-            label={getEngagementLabel(
-              engagementProbability
-            )}
-          />
-
-        </div>
-
-        {/* EXISTING VELOCITY DATA */}
-
-        <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
-
-          <MetricCard
-            title="Initial Likes / Min"
-            value={formatNumber(
-              engagementVelocity.initialLikesPerMin
-            )}
-            label={getEngagementLabel(
-              engagementProbability
-            )}
-          />
-
-          <MetricCard
-            title="Initial Shares / Min"
-            value={formatNumber(
-              engagementVelocity.initialSharesPerMin
-            )}
-            label="Share Velocity"
-          />
-
-          <MetricCard
-            title="Acceleration"
-            value={
-              engagementVelocity.accelerationRate ??
-              "0%"
-            }
-            label="Rate of Change"
-          />
-
-          <MetricCard
-            title="Follower Reach"
-            value={
-              userProfiler.followerReachIndex ??
-              "0"
-            }
-            label="Reach Index"
-          />
-
-        </div>
-
-        <div className="mt-5 space-y-2">
-
-          {explainableAI
-            .slice(0, 4)
-            .map(
-              (
-                item: string,
-                index: number
-              ) => (
-                <div
-                  key={index}
-                  className="flex gap-2 text-xs text-slate-300"
-                >
-
-                  <span className="text-emerald-400">
-                    ✓
-                  </span>
-
-                  <span>{item}</span>
-
-                </div>
-              )
-            )}
-
-        </div>
-
-      </div>
-
-      {/* =====================================================
-          IMAGE ANALYSIS
-      ====================================================== */}
-
-      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-        <h3 className="text-[10px] font-bold uppercase tracking-widest text-blue-400">
-          Image Analysis
-        </h3>
-
-        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
-
-          <MetricCard
-            title="Visual Objects"
-            value={detectedObjects.length}
-            label="Detected"
-          />
-
-          <MetricCard
-            title="Visual Confidence"
-            value={
-              detectedObjects.length > 0
-                ? `${Math.round(
-                    detectedObjects.reduce(
-                      (
-                        sum: number,
-                        obj: any
-                      ) =>
-                        sum +
-                        Number(
-                          obj.confidence ?? 0
-                        ),
-                      0
-                    ) /
-                      detectedObjects.length
-                  )}%`
-                : "0%"
-            }
-            label="Average"
-          />
-
-          <MetricCard
-            title="CLIP Embedding"
-            value={
-              clipEmbeddingDimension
-            }
-            label="Dimension"
-          />
-
-          <MetricCard
-            title="Detected Focus"
-            value={
-              detectedObjects[0]?.label ??
-              "None"
-            }
-            label="Primary"
-          />
-
-        </div>
-
-        {/* COLORS */}
-
-        {dominantColors.length > 0 && (
-          <div className="mt-5">
-
-            <p className="mb-3 text-[9px] uppercase text-slate-500">
-              Dominant Colors
-            </p>
-
-            <div className="flex flex-wrap gap-3">
-
-              {dominantColors.map(
-                (
-                  color: any,
-                  index: number
-                ) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-2 rounded-lg bg-[#191923] px-3 py-2"
-                  >
-
-                    <span
-                      className="h-4 w-4 rounded-full border border-slate-600"
-                      style={{
-                        backgroundColor:
-                          color.hex ??
-                          "#64748b",
-                      }}
-                    />
-
-                    <span className="text-[10px] text-slate-300">
-                      {color.name ??
-                        color.hex ??
-                        "Color"}
-                    </span>
-
-                    <span className="text-[10px] text-slate-500">
-                      {color.percentage ??
-                        0}
-                      %
-                    </span>
-
-                  </div>
-                )
-              )}
-
-            </div>
-
-          </div>
-        )}
-
-        {/* BACKEND IMAGE ANALYSIS NOTE */}
-
-        {recommendationReport?.image_analysis && (
-          <div className="mt-5 rounded-lg bg-[#191923] p-3">
-
-            <p className="text-[10px] leading-5 text-slate-500">
-              {getDisplayText(
-                recommendationReport
-                  .image_analysis?.note,
-                getDisplayText(
-                  recommendationReport
-                    .image_analysis?.status
-                )
-              )}
-            </p>
-
-          </div>
-        )}
-
-      </div>
-
-      {/* =====================================================
-          TOP IMPROVEMENTS
-      ====================================================== */}
-
-      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-        <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
-          Top Improvements
-        </h3>
-
-        <div className="mt-4 space-y-3">
-
-          {improvements.map(
-            (
-              improvement: {
-                title: string;
-                description: string;
-                impact: string;
-              },
-              index: number
-            ) => (
-              <div
-                key={index}
-                className="rounded-xl bg-[#191923] p-4"
-              >
-
+      {/* TOP IMPROVEMENTS */}
+      {topImprovements.length > 0 && (
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
+            Top Improvements
+          </h3>
+          <div className="mt-4 space-y-3">
+            {topImprovements.map((imp, i) => (
+              <div key={i} className="rounded-xl bg-[#191923] p-4">
                 <div className="flex items-start justify-between gap-4">
-
                   <div>
-
                     <h4 className="text-xs font-bold text-white">
-                      {index + 1}.{" "}
-                      {improvement.title}
+                      {imp.rank}. {imp.title}
                     </h4>
-
-                    <p className="mt-2 text-[11px] leading-5 text-slate-400">
-                      {improvement.description}
-                    </p>
-
+                    <p className="mt-2 text-[11px] leading-5 text-slate-400">{imp.why}</p>
+                    <p className="mt-1 text-[11px] leading-5 text-slate-500">{imp.how}</p>
                   </div>
-
-                  <span className="whitespace-nowrap text-[10px] font-bold text-emerald-400">
-                    {improvement.impact}
+                  <span className="whitespace-nowrap text-[10px] font-bold text-emerald-400 shrink-0">
+                    {"★".repeat(imp.stars)}
                   </span>
-
                 </div>
-
               </div>
-            )
-          )}
-
+            ))}
+          </div>
         </div>
+      )}
 
-      </div>
-
-      {/* =====================================================
-          MODEL PIPELINE
-      ====================================================== */}
-
-      <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
-
-        <h3 className="text-[10px] font-bold uppercase tracking-widest text-purple-400">
-          AI Model Pipeline
-        </h3>
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-
-          <PipelineCard
-            title="CatBoost"
-            value={
-              ensembleModels.catBoostProb ??
-              "N/A"
-            }
-          />
-
-          <PipelineCard
-            title="MLP Neural Network"
-            value={
-              ensembleModels.mlpNeuralNetProb ??
-              "N/A"
-            }
-          />
-
-          <PipelineCard
-            title="Meta Learner"
-            value={
-              ensembleModels.level3MetaLearnerScore ??
-              viralityScore
-            }
-          />
-
-          <PipelineCard
-            title="Fusion Layer"
-            value={
-              pipelineBreakdown.fusionLayer ??
-              "Multimodal Fusion"
-            }
-          />
-
+      {/* EXPLAINABLE AI */}
+      {explainableAI.length > 0 && (
+        <div className="rounded-xl border border-slate-800 bg-[#111119] p-5">
+          <h3 className="text-[10px] font-bold uppercase tracking-widest text-purple-400">
+            Explainable AI
+          </h3>
+          <div className="mt-4 space-y-3">
+            {explainableAI.map((factor, i) => (
+              <div key={i} className="rounded-lg bg-[#191923] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-purple-300">{factor.name}</div>
+                  <StatusChip status={factor.status} />
+                </div>
+                <div className="mt-1 text-[11px] leading-5 text-slate-400">
+                  {factor.description}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-
-      </div>
+      )}
 
     </section>
   );
 }
 
-/* =========================================================
-   METRIC CARD
-========================================================= */
+/* ========================================================= */
+
+function StatusChip({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    Strong: "border-emerald-700/50 bg-emerald-950/30 text-emerald-300",
+    Moderate: "border-yellow-700/50 bg-yellow-950/30 text-yellow-300",
+    "Needs Attention": "border-red-700/50 bg-red-950/30 text-red-300",
+    Informational: "border-slate-700/50 bg-slate-900/40 text-slate-400",
+  };
+
+  return (
+    <span
+      className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-[9px] font-semibold ${
+        styles[status] || styles.Informational
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function Badge({ active, label }: { active: boolean; label: string }) {
+  return (
+    <span
+      className={`rounded-md px-2 py-1 text-[10px] border ${
+        active
+          ? "border-emerald-700/50 bg-emerald-950/20 text-emerald-300"
+          : "border-slate-700/50 bg-slate-900/40 text-slate-500"
+      }`}
+    >
+      {active ? "✓" : "✕"} {label}
+    </span>
+  );
+}
 
 interface MetricCardProps {
   title: string;
   value: React.ReactNode;
   label: string;
+  // Optional: when true, shows a small "Estimated" tag so a forecasted
+  // value (see estimate_missing_engagement in recommendation_engine.py)
+  // is never mistaken for tracked/live data. Omit for cards that are
+  // never forecasted (e.g. Image Analysis, Followers).
+  estimated?: boolean;
 }
 
-function MetricCard({
-  title,
-  value,
-  label,
-}: MetricCardProps) {
+function MetricCard({ title, value, label, estimated }: MetricCardProps) {
   return (
     <div className="rounded-lg bg-[#191923] p-4">
-
-      <div className="text-[9px] uppercase text-slate-500">
-        {title}
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[9px] uppercase text-slate-500">{title}</div>
+        {estimated && (
+          <span className="text-[8px] rounded-full bg-cyan-950/40 border border-cyan-700/50 text-cyan-300 px-1.5 py-0.5 whitespace-nowrap">
+            Estimated
+          </span>
+        )}
       </div>
-
-      <div className="mt-2 text-lg font-bold text-white">
-        {value}
-      </div>
-
-      <div className="mt-1 text-[9px] text-slate-500">
-        {label}
-      </div>
-
+      <div className="mt-2 text-lg font-bold text-white">{value}</div>
+      <div className="mt-1 text-[9px] text-slate-500">{label}</div>
     </div>
   );
 }
-
-/* =========================================================
-   PIPELINE CARD
-========================================================= */
-
-interface PipelineCardProps {
-  title: string;
-  value: React.ReactNode;
-}
-
-function PipelineCard({
-  title,
-  value,
-}: PipelineCardProps) {
-  return (
-    <div className="rounded-lg bg-[#191923] p-4">
-
-      <div className="text-[9px] uppercase text-slate-500">
-        {title}
-      </div>
-
-      <div className="mt-2 break-words text-sm font-bold text-purple-300">
-        {value}
-      </div>
-
-    </div>
-  );
-}
-
-/* =========================================================
-   SCORE HELPERS
-========================================================= */
 
 function getScoreLabel(score: number) {
   if (score >= 80) return "Excellent";
@@ -1704,41 +825,26 @@ function getScoreLabel(score: number) {
 }
 
 function getScoreClass(score: number) {
-  if (score >= 80) {
-    return "text-emerald-400";
-  }
-
-  if (score >= 65) {
-    return "text-cyan-400";
-  }
-
-  if (score >= 50) {
-    return "text-yellow-400";
-  }
-
+  if (score >= 80) return "text-emerald-400";
+  if (score >= 65) return "text-cyan-400";
+  if (score >= 50) return "text-yellow-400";
   return "text-red-400";
 }
 
-function getConfidenceLabel(score: number) {
-  if (score >= 90) return "Very High";
-  if (score >= 75) return "High";
-  if (score >= 60) return "Moderate";
-  return "Low";
-}
-
-function getEngagementLabel(score: number) {
-  if (score >= 80) return "Very High";
-  if (score >= 65) return "High";
-  if (score >= 50) return "Moderate";
-  return "Low";
+// Hex equivalents of getScoreClass, for the conic-gradient gauge ring
+// (Tailwind classes don't apply to inline gradient stops). Kept in sync
+// with the same thresholds so the ring color always matches the label
+// underneath it -- e.g. an "Average" score no longer renders in the same
+// red used for "Low Potential".
+function getScoreColor(score: number) {
+  if (score >= 80) return "#34d399"; // emerald-400
+  if (score >= 65) return "#22d3ee"; // cyan-400
+  if (score >= 50) return "#facc15"; // yellow-400
+  return "#ef4444"; // red-400
 }
 
 function formatNumber(value: any) {
   const number = Number(value);
-
-  if (Number.isNaN(number)) {
-    return "0";
-  }
-
+  if (Number.isNaN(number)) return "0";
   return number.toLocaleString();
 }

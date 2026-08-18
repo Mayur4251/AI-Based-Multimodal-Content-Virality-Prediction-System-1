@@ -53,8 +53,31 @@ if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
 // Chat fallback
 // ------------------------------------------------------------
 
-function getSimulatedChatResponse(message: string) {
-  const msgLower = message.toLowerCase();
+function getSimulatedChatResponse(message: string, context?: any) {
+  const msgLower = (message || "").toLowerCase();
+
+  // Context-aware fallback: if we have real prediction data and the user
+  // is asking a generic "what should I improve" question, answer with
+  // the actual top weakness instead of the generic canned reply below.
+  if (
+    context &&
+    (msgLower.includes("improve") ||
+      msgLower.includes("suggest") ||
+      msgLower.includes("better") ||
+      msgLower.includes("viral") ||
+      msgLower.includes("wrong"))
+  ) {
+    const topWeakness =
+      Array.isArray(context.weaknesses) && context.weaknesses.length > 0
+        ? context.weaknesses[0]
+        : null;
+
+    if (topWeakness) {
+      return `Based on your current prediction (${
+        typeof context.viralityScore === "number" ? context.viralityScore : "?"
+      }% virality), the highest-impact fix right now is: ${topWeakness} Address that first, then revisit hashtags and posting time.`;
+    }
+  }
 
   if (
     msgLower.includes("caption") ||
@@ -93,6 +116,173 @@ function getSimulatedChatResponse(message: string) {
 }
 
 // ------------------------------------------------------------
+// AI Advisor context -> Gemini system instruction
+//
+// Builds a system prompt that includes the ACTUAL current prediction
+// result (caption, score, strengths/weaknesses, etc.) when the frontend
+// sends one, so the advisor can answer using real data instead of
+// asking the user to re-paste it. Falls back to an honest "no
+// prediction yet" instruction when context is absent -- never pretends
+// to have data it doesn't.
+//
+// UPDATED (this pass): two correctness fixes based on real chat output
+// review --
+//
+// 1. Gemini was fabricating a numeric "caption score" (e.g. "83/100")
+//    that does not exist anywhere in AdvisorContext, and was also
+//    stating a precise new predicted percentage (e.g. "83%-88%") after
+//    hypothetical changes as if it had re-run the ML model. The old
+//    rule ("never invent a score... not listed above") was too vague --
+//    it didn't explicitly cover fabricated *sub*-metrics or predictive
+//    percentages phrased with false precision. Rule 1 and rule 5 below
+//    close that gap.
+//
+// 2. Gemini was replying with full markdown (###, **, >, ---), but the
+//    chat bubble in AIConsultantModal.tsx renders plain text only
+//    (whitespace-pre-line, no markdown parser) -- so users were seeing
+//    literal asterisks/hashes/angle-brackets in the UI. Rule 6 tells
+//    Gemini to stop using markdown syntax entirely.
+// ------------------------------------------------------------
+
+function buildAdvisorSystemInstruction(context: any): string {
+  const base =
+    "You are the ViralAI Chief Virality Architect, a virality consultant embedded inside a prediction tool.";
+
+  if (!context || typeof context !== "object") {
+    return (
+      base +
+      " No prediction result has been shared for this conversation yet. If the user asks how to improve or go viral, tell them to run a prediction first (or paste their caption/details directly) so you have real data to work from -- do not fabricate a score or caption you were not given. You may still give general best-practice guidance if they ask a broad question, but be upfront that it's general advice, not analysis of a specific post." +
+      " Format your replies as plain conversational text suitable for a small chat bubble -- no markdown headers (###), bold asterisks, blockquotes (>), or horizontal rules (---). Use short paragraphs and simple numbered lists (1. 2. 3.) only, since markdown symbols will render as literal characters, not formatting."
+    );
+  }
+
+  const lines: string[] = [base, ""];
+
+  lines.push(
+    "The user currently has a REAL post loaded in the prediction tool. This is not optional background info -- it is the subject of this conversation. Treat every question, however generically phrased (\"how do I go viral\", \"how can I improve\", \"any tips\"), as a question about THIS specific post unless the user clearly asks about something else entirely. Do not default to a generic framework/checklist when this data is available -- open your answer by referencing at least one concrete detail from below (the caption, the score, or a specific weakness), then build your advice around it."
+  );
+
+  lines.push("");
+  lines.push("CURRENT POST DATA:");
+
+  if (context.caption) lines.push(`- Caption: "${context.caption}"`);
+  if (context.platform) lines.push(`- Platform: ${context.platform}`);
+  if (context.category) lines.push(`- Category: ${context.category}`);
+  if (context.mediaType) lines.push(`- Media type: ${context.mediaType}`);
+  if (typeof context.viralityScore === "number") {
+    lines.push(`- Predicted virality score: ${context.viralityScore}%`);
+  }
+
+  if (context.postingTime) {
+    lines.push(
+      `- Posting time: ${context.postingTime.current_time ?? "unspecified"} ` +
+        `(status: ${context.postingTime.performance ?? "unknown"}, ` +
+        `recommended window: ${context.postingTime.recommended_window ?? "unknown"})`
+    );
+  }
+
+  if (Array.isArray(context.strengths) && context.strengths.length > 0) {
+    lines.push(`- Strengths already identified: ${context.strengths.join("; ")}`);
+  }
+
+  if (Array.isArray(context.weaknesses) && context.weaknesses.length > 0) {
+    lines.push(`- Weaknesses already identified: ${context.weaknesses.join("; ")}`);
+  }
+
+  if (Array.isArray(context.suggestedHashtags) && context.suggestedHashtags.length > 0) {
+    lines.push(`- System-suggested hashtags: ${context.suggestedHashtags.join(", ")}`);
+  }
+
+  if (Array.isArray(context.topImprovements) && context.topImprovements.length > 0) {
+    lines.push("- Top improvements already identified by the system:");
+    for (const imp of context.topImprovements.slice(0, 5)) {
+      lines.push(`  * ${imp.title}: ${imp.why} ${imp.how}`);
+    }
+  }
+
+  lines.push("");
+  lines.push(
+    "Rules: " +
+    "(1) Never invent a score, caption, or metric not listed above -- this includes fabricated sub-scores like a numeric \"caption score\", \"visual score\", or \"engagement score\" that are not explicitly provided in CURRENT POST DATA. If you want to describe caption or image quality, use qualitative language (e.g. \"your caption is a bit generic\" or \"the caption is on the shorter side\") instead of making up a number. " +
+    "(2) Never ask the user to paste data that's already listed above. " +
+    "(3) Keep answers focused and specific to this post rather than a long generic multi-phase framework -- 3 to 6 concrete, prioritized suggestions is usually enough. " +
+    "(4) You may add general technique/best-practice color, but it must be applied TO this post's actual weaknesses, not offered as a standalone checklist. " +
+    "(5) If asked to predict a new score after hypothetical changes, do NOT state a precise new percentage or percentage range as if it were recalculated by the ML model -- you have not re-run any prediction. Instead, describe the expected DIRECTION and rough MAGNITUDE qualitatively (e.g. \"this should meaningfully improve your score, though the exact number would need a fresh prediction run\") and explicitly say a new prediction run is needed for an actual number. " +
+    "(6) Format replies as plain conversational text suitable for a small chat bubble -- no markdown headers (###), bold asterisks (**text**), blockquotes (>), or horizontal rules (---). Use short paragraphs and simple numbered lists (1. 2. 3.) only, since markdown symbols will render as literal characters, not formatting, in this UI."
+  );
+
+  return lines.join("\n");
+}
+
+// ------------------------------------------------------------
+// Gemini caption generation (Step 3)
+//
+// Reuses the same `ai` client and chats.create()/sendMessage() pattern
+// as /api/chat. Falls back honestly (not silently) when GEMINI_API_KEY
+// is missing or the call fails -- caller must check `source` and never
+// present a non-"gemini" result as if Gemini generated it.
+// ------------------------------------------------------------
+
+async function generateCaptionWithGemini(params: {
+  originalCaption: string;
+  category: string;
+  platform: string;
+  imageAnalysis?: any;
+}): Promise<{ caption: string | null; source: "gemini" | "unavailable" | "error"; reason?: string }> {
+  if (!ai) {
+    return {
+      caption: null,
+      source: "unavailable",
+      reason: "GEMINI_API_KEY is not configured on the server.",
+    };
+  }
+
+  try {
+    const imageContext =
+      params.imageAnalysis && params.imageAnalysis.brightness !== undefined
+        ? `The uploaded image is ${params.imageAnalysis.brightness_label || ""}, ${
+            params.imageAnalysis.tone || ""
+          }, ${params.imageAnalysis.composition || ""}, with ${
+            params.imageAnalysis.detail_label || "moderate detail"
+          }.`
+        : "No image was supplied.";
+
+    const prompt = [
+      `Original caption: "${params.originalCaption || "(empty)"}"`,
+      `Content category: ${params.category}`,
+      `Target platform: ${params.platform}`,
+      imageContext,
+      "",
+      "Rewrite this into a genuinely improved social media caption for the target platform. Keep the original idea/topic. Add a natural hook and a touch of personality, and end with a specific question or call-to-action that actually fits this content -- not a generic one. Keep it concise (roughly 20-40 words). Return ONLY the caption text, no preamble, no quotes, no markdown.",
+    ].join("\n");
+
+    const chat = ai.chats.create({
+      model: "gemini-3.6-flash",
+      config: {
+        systemInstruction:
+          "You are a social media copywriter. You write concise, natural, platform-appropriate captions. You never use robotic templated phrasing.",
+      },
+      history: [],
+    });
+
+    const response = await chat.sendMessage({ message: prompt });
+    const text = (response.text || "").trim();
+
+    if (!text) {
+      return { caption: null, source: "error", reason: "Gemini returned an empty response." };
+    }
+
+    return { caption: text, source: "gemini" };
+  } catch (error: any) {
+    console.warn(
+      "Gemini caption generation failed, falling back to template caption:",
+      error?.message || error
+    );
+    return { caption: null, source: "error", reason: error?.message || "Gemini API call failed." };
+  }
+}
+
+// ------------------------------------------------------------
 // Prediction API
 //
 // Real prediction is handled by FastAPI.
@@ -116,6 +306,10 @@ app.post("/api/predict", async (req, res) => {
       content_category,
       platform,
       model,
+      keywords,
+      hashtags,
+      imageBase64,
+      imageMimeType,
     } = req.body;
 
     // --------------------------------------------------------
@@ -154,11 +348,21 @@ app.post("/api/predict", async (req, res) => {
 
       platform: platform || "Instagram",
       model: model || "ensemble",
+
+      keywords: keywords || "",
+      hashtags: hashtags || "",
+      imageBase64: imageBase64 || "",
+      imageMimeType: imageMimeType || "",
     };
 
     console.log(
       "Sending real ML prediction request to FastAPI:",
-      predictionPayload
+      {
+        ...predictionPayload,
+        imageBase64: predictionPayload.imageBase64
+          ? `<${predictionPayload.imageBase64.length} chars>`
+          : "",
+      }
     );
 
     // --------------------------------------------------------
@@ -233,6 +437,36 @@ app.post("/api/predict", async (req, res) => {
       data.recommendation_report || null;
 
     // --------------------------------------------------------
+    // Step 3: replace the static per-category caption template with a
+    // genuine Gemini rewrite. If Gemini is unavailable or fails, KEEP
+    // the Python template but label it honestly via caption_source --
+    // never present the template as if Gemini generated it.
+    // --------------------------------------------------------
+
+    if (recommendationReport?.caption_analysis) {
+      const geminiResult = await generateCaptionWithGemini({
+        originalCaption: predictionPayload.caption,
+        category:
+          recommendationReport.category ||
+          predictionPayload.content_category,
+        platform: predictionPayload.platform,
+        imageAnalysis: recommendationReport.image_analysis,
+      });
+
+      if (geminiResult.source === "gemini" && geminiResult.caption) {
+        recommendationReport.caption_analysis.ai_suggested_caption =
+          geminiResult.caption;
+        recommendationReport.caption_analysis.caption_source = "gemini";
+        recommendationReport.caption_analysis.reason =
+          "Generated by Gemini based on your original caption, topic, and image analysis.";
+      } else {
+        recommendationReport.caption_analysis.caption_source =
+          geminiResult.source; // "unavailable" | "error"
+        recommendationReport.caption_analysis.caption_source_note =
+          geminiResult.reason || "";
+      }
+    }
+    // --------------------------------------------------------
     // Get recommendation information
     // --------------------------------------------------------
 
@@ -253,9 +487,6 @@ app.post("/api/predict", async (req, res) => {
 
     // --------------------------------------------------------
     // Engagement percentage
-    //
-    // Prefer the recommendation engine's actual engagement
-    // percentage when available.
     // --------------------------------------------------------
 
     let engagementProbability = 0;
@@ -285,9 +516,6 @@ app.post("/api/predict", async (req, res) => {
 
     // --------------------------------------------------------
     // Confidence
-    //
-    // Confidence is calculated from the ML probability.
-    // It is NOT randomly generated.
     // --------------------------------------------------------
 
     const confidence = Math.round(
@@ -296,15 +524,6 @@ app.post("/api/predict", async (req, res) => {
 
     // --------------------------------------------------------
     // Reach forecast / AI Content Coach
-    //
-    // IMPORTANT:
-    // ai_content_coach can be an OBJECT from the Python backend.
-    // React cannot directly render an object.
-    //
-    // Keep the original recommendation report unchanged, but
-    // create a frontend-safe string for the AI Content Coach
-    // value so PredictionResult.tsx never receives a raw object
-    // where a React child is expected.
     // --------------------------------------------------------
 
     let reachForecast = "Not available";
@@ -344,6 +563,20 @@ app.post("/api/predict", async (req, res) => {
     }
 
     // --------------------------------------------------------
+    // AI Content Coach -- always sent as an OBJECT
+    // --------------------------------------------------------
+
+    const safeAiContentCoach = {
+      message: reachForecast,
+      current_virality:
+        aiContentCoach &&
+        typeof aiContentCoach === "object" &&
+        typeof aiContentCoach.current_virality === "string"
+          ? aiContentCoach.current_virality
+          : `${viralityScore}%`,
+    };
+
+    // --------------------------------------------------------
     // Sentiment
     // --------------------------------------------------------
 
@@ -353,7 +586,6 @@ app.post("/api/predict", async (req, res) => {
       recommendationReport?.sentiment ||
       "Based on caption sentiment analysis.";
 
-    // Make sure sentiment is always a string
     if (typeof sentiment !== "string") {
       sentiment = "Based on caption sentiment analysis.";
     }
@@ -421,7 +653,6 @@ app.post("/api/predict", async (req, res) => {
     // --------------------------------------------------------
 
     const prediction = {
-      // Main ML result
       viralityScore,
 
       viral_probability: Number(
@@ -437,7 +668,6 @@ app.post("/api/predict", async (req, res) => {
         model ||
         "ensemble",
 
-      // Analysis
       sentiment,
 
       engagementProbability,
@@ -452,10 +682,6 @@ app.post("/api/predict", async (req, res) => {
 
       suggestedHooks,
 
-      // ------------------------------------------------------
-      // Textual features
-      // ------------------------------------------------------
-
       textualFeatures: {
         semanticKeywords:
           recommendationReport?.caption_analysis
@@ -468,20 +694,11 @@ app.post("/api/predict", async (req, res) => {
           sentimentAnalysis,
       },
 
-      // ------------------------------------------------------
-      // Image information
-      //
-      // Image is NOT used for ML virality prediction.
-      // ------------------------------------------------------
-
       visualFeatures: {
-        message:
-          "Image content is not used for ML prediction. Prediction is based on caption and structured input data.",
+        message: predictionPayload.imageBase64
+          ? "Image was analyzed using handcrafted visual features (brightness, colorfulness, edge density, saturation, warm/cool ratio, aspect ratio) as part of the ML prediction."
+          : "No image was supplied for this prediction -- neutral default visual features were used instead.",
       },
-
-      // ------------------------------------------------------
-      // Metadata features
-      // ------------------------------------------------------
 
       metadataFeatures: {
         postHour:
@@ -521,13 +738,9 @@ app.post("/api/predict", async (req, res) => {
           predictionPayload.platform,
       },
 
-      // ------------------------------------------------------
-      // ML pipeline
-      // ------------------------------------------------------
-
       pipelineBreakdown: {
         fusionLayer:
-          "Text + Metadata ML Prediction",
+          "Text + Image + Metadata ML Prediction",
 
         ensembleModels: {
           model:
@@ -542,22 +755,12 @@ app.post("/api/predict", async (req, res) => {
         },
       },
 
-      // ------------------------------------------------------
-      // IMPORTANT:
-      // This is a REAL prediction.
-      // ------------------------------------------------------
-
       mocked: false,
 
-      // Complete recommendation report
-      //
-      // Keep all recommendation data intact, but make
-      // ai_content_coach React-safe because the backend can
-      // return it as an object.
       recommendationReport: recommendationReport
         ? {
             ...recommendationReport,
-            ai_content_coach: reachForecast,
+            ai_content_coach: safeAiContentCoach,
           }
         : null,
     };
@@ -575,7 +778,7 @@ app.post("/api/predict", async (req, res) => {
         recommendationReport
           ? {
               ...recommendationReport,
-              ai_content_coach: reachForecast,
+              ai_content_coach: safeAiContentCoach,
             }
           : null,
 
@@ -611,12 +814,14 @@ app.post("/api/chat", async (req, res) => {
   const {
     message,
     history,
+    context,
   } = req.body;
 
   if (!ai) {
     const reply =
       getSimulatedChatResponse(
-        message || ""
+        message || "",
+        context
       );
 
     return res.json({
@@ -649,7 +854,7 @@ app.post("/api/chat", async (req, res) => {
 
         config: {
           systemInstruction:
-            "You are the ViralAI Chief Virality Architect. Analyze social media content, captions, engagement patterns, posting strategy and audience behavior. Give practical, specific and evidence-based recommendations. Do not invent metrics or claim that a recommendation is based on data unless data is provided.",
+            buildAdvisorSystemInstruction(context),
         },
 
         history:
@@ -673,7 +878,8 @@ app.post("/api/chat", async (req, res) => {
 
     const reply =
       getSimulatedChatResponse(
-        message || ""
+        message || "",
+        context
       );
 
     return res.json({

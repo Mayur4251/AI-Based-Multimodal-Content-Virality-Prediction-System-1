@@ -24,6 +24,29 @@ import re
 # caption quality, hashtags, category, and timing -- the signals a user
 # actually controls before hitting "post" -- plus the ML model's
 # probability output.
+#
+# STEP 2 UPDATE: get_suggested_hashtags() no longer relies solely on a
+# static per-category hashtag library. It now extracts genuinely topical
+# words from the caption + typed keywords first (see
+# extract_caption_keywords()), and only falls back to the category
+# library to fill any remaining slots. This makes hashtag suggestions
+# reflect what the specific post is actually about, not just its broad
+# category.
+#
+# LATEST UPDATE (this pass):
+# 1. analyze_engagement() now falls back to a follower-based engagement
+#    rate when reach and impressions are both 0/unavailable, instead of
+#    silently reporting 0.00% even when likes/comments/shares/saves are
+#    genuinely strong relative to the audience. The new
+#    "engagement_rate_basis" field ("reach" | "impressions" | "followers"
+#    | "none") tells the frontend which denominator was actually used, so
+#    the UI label stays honest instead of always saying "Relative to
+#    reach".
+# 2. analyze_posting_time() now normalises the platform string with a
+#    substring/alias match instead of an exact dict-key match, so values
+#    like "Twitter / X", "X (Twitter)", or "x.com" correctly resolve to
+#    the twitter/X posting window instead of silently falling back to
+#    "default".
 
 
 # ============================================================
@@ -565,10 +588,76 @@ def generate_ai_caption(
 # HASHTAG ANALYSIS
 # ============================================================
 
+# Common English filler words to exclude from caption-derived hashtags --
+# not a stemmer/lemmatizer, just a stoplist, so this stays dependency-free.
+_HASHTAG_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be",
+    "been", "being", "to", "of", "in", "on", "at", "for", "with", "by",
+    "from", "up", "about", "into", "over", "after", "this", "that", "these",
+    "those", "it", "its", "as", "if", "then", "than", "so", "just", "not",
+    "no", "yes", "you", "your", "yours", "i", "me", "my", "we", "our", "us",
+    "he", "she", "they", "them", "his", "her", "their", "what", "which",
+    "who", "whom", "will", "would", "can", "could", "should", "do", "does",
+    "did", "done", "have", "has", "had", "having", "am", "today", "day",
+    "one", "new", "get", "got", "like", "really",
+}
+
+
+def extract_caption_keywords(
+    caption: str,
+    keywords: Optional[List[str]] = None,
+    max_n: int = 6,
+) -> List[str]:
+    """
+    Pull genuinely topical words directly out of the caption + the user's
+    typed keywords, so hashtag suggestions reflect what THIS post is
+    actually about, not just its broad category.
+
+    Deliberately simple (stopword filtering + light scoring), not a
+    trained model. Reusing the project's already-trained TF-IDF vectorizer
+    (vectorizer_tfidf.joblib, used in inference.py) was considered instead,
+    but its vocabulary comes from Flickr8k image-caption text ("dog running
+    through field"), not real social captions -- it would silently return
+    nothing for most real-world inputs. This works directly on whatever
+    the user actually typed, which is the more reliable signal here.
+    """
+
+    candidates: List[Any] = []
+    seen_lower = set()
+
+    def add(word: str, boost: int = 0) -> None:
+        clean = re.sub(r"[^A-Za-z0-9]", "", word)
+        if len(clean) < 3:
+            return
+        key = clean.lower()
+        if key in seen_lower or key in _HASHTAG_STOPWORDS:
+            return
+        seen_lower.add(key)
+        candidates.append((clean[0].upper() + clean[1:], boost))
+
+    # User-typed keywords/hashtags are the strongest signal of real intent.
+    for kw in keywords or []:
+        for token in re.split(r"[,\s#]+", str(kw)):
+            if token:
+                add(token, boost=10)
+
+    # Then genuinely topical words pulled from the caption itself --
+    # capitalized words (often proper nouns/places/names) score higher,
+    # then longer words (tend to be more specific than short filler words).
+    for raw_word in re.findall(r"[A-Za-z']+", caption or ""):
+        boost = 5 if raw_word[:1].isupper() else 0
+        boost += min(len(raw_word), 10) // 3
+        add(raw_word, boost=boost)
+
+    candidates.sort(key=lambda pair: pair[1], reverse=True)
+    return [f"#{word}" for word, _ in candidates[:max_n]]
+
+
 def get_suggested_hashtags(
     category: str,
     current_hashtags: Optional[List[str]] = None,
-    keywords: Optional[List[str]] = None
+    keywords: Optional[List[str]] = None,
+    caption: str = "",
 ) -> Dict[str, Any]:
 
     current = []
@@ -589,62 +678,48 @@ def get_suggested_hashtags(
         ]:
             current.append(clean)
 
+    # Content-derived hashtags come FIRST -- these actually reflect what
+    # the user typed/wrote, not just the detected category.
+    content_hashtags = [
+        tag for tag in extract_caption_keywords(caption, keywords, max_n=6)
+        if tag.lower() not in [c.lower() for c in current]
+    ]
+
+    # Category library is used only to fill any remaining slots, never as
+    # the primary source.
     library = HASHTAG_LIBRARY.get(
         category,
         HASHTAG_LIBRARY["default"]
     )
 
-    recommended = [
-        tag
-        for tag in library
-        if tag.lower()
-        not in [item.lower() for item in current]
-    ][:6]
+    library_fill = [
+        tag for tag in library
+        if tag.lower() not in [c.lower() for c in current]
+        and tag.lower() not in [t.lower() for t in content_hashtags]
+    ]
 
-    keyword_hashtags = []
-
-    for keyword in keywords or []:
-
-        clean_keyword = re.sub(
-            r"[^A-Za-z0-9_]",
-            "",
-            str(keyword)
-        )
-
-        if clean_keyword:
-
-            hashtag = f"#{clean_keyword}"
-
-            if hashtag.lower() not in [
-                item.lower()
-                for item in current + recommended
-            ]:
-                keyword_hashtags.append(hashtag)
-
-    recommended = (
-        keyword_hashtags[:3]
-        + recommended
-    )[:6]
+    recommended = (content_hashtags + library_fill)[:6]
 
     if len(current) == 0:
 
         reason = (
-            "No hashtags were detected. Add a small set of highly relevant "
-            "hashtags based on the actual topic instead of using unrelated tags."
+            "No hashtags were detected. The suggestions below are pulled "
+            "from your caption and typed keywords first, with "
+            "category-relevant tags filling any remaining slots."
         )
 
     elif len(current) < 4:
 
         reason = (
             f"You currently use {len(current)} hashtag(s). "
-            "Consider adding a few more topic-specific hashtags."
+            "Consider adding a few more that reflect the actual topic of this caption."
         )
 
     else:
 
         reason = (
             f"You currently use {len(current)} hashtags. "
-            "Focus on relevance rather than simply increasing the count."
+            "Focus on relevance to your actual caption rather than simply increasing the count."
         )
 
     return {
@@ -658,14 +733,41 @@ def get_suggested_hashtags(
 # POSTING TIME ANALYSIS
 # ============================================================
 
+def _resolve_platform_key(platform: Any) -> str:
+    """
+    Normalise a free-form platform string into one of the
+    OPTIMAL_POSTING_TIMES keys using substring/alias matching, instead of
+    requiring an exact match.
+
+    Exact-match lookups broke on real-world values like "Twitter / X" or
+    "X (Twitter)" -- lowercasing that string produces "twitter / x", which
+    matches neither the "twitter" nor the "x" key, so it silently fell
+    back to "default". This checks for known aliases as substrings first.
+    """
+
+    platform_raw = str(platform or "instagram").lower().strip()
+
+    if "twitter" in platform_raw or platform_raw in ("x", "x.com"):
+        return "twitter"
+
+    if "instagram" in platform_raw:
+        return "instagram"
+
+    if "facebook" in platform_raw:
+        return "facebook"
+
+    if "linkedin" in platform_raw:
+        return "linkedin"
+
+    return platform_raw
+
+
 def analyze_posting_time(
     current_time: Any,
     platform: str = "instagram"
 ) -> Dict[str, Any]:
 
-    platform_key = str(
-        platform or "instagram"
-    ).lower().strip()
+    platform_key = _resolve_platform_key(platform)
 
     optimal = OPTIMAL_POSTING_TIMES.get(
         platform_key,
@@ -700,11 +802,130 @@ def analyze_posting_time(
 
 
 # ============================================================
-# ENGAGEMENT ANALYSIS (POST-PUBLISH ONLY -- OPTIONAL)
+# ENGAGEMENT FORECAST (fills in unsupplied numbers with a documented,
+# transparent estimate)
 # ============================================================
-# Call this only when you actually have real engagement numbers for an
-# already-published post (e.g. a future "check my live post" endpoint).
-# The pre-publish prediction flow does not call this at all.
+# The Post-Publish Engagement Analysis panel is meant to show what a post
+# is likely to look like once it goes live -- not just echo back whatever
+# the user happened to type. If the user only filled in e.g. Likes and
+# Comments and left Shares/Saves/Reach/Impressions untouched (defaulting
+# to 0), this fills those specific gaps with a forecast derived from
+# follower_count and the ML model's virality_score.
+#
+# This is a documented estimation formula, NOT measured/tracked data and
+# NOT a second trained model -- there is no real outcome data to train one
+# on. Any field that already has a real, explicitly supplied value (> 0)
+# is left completely untouched and marked estimated=False. Only fields
+# still at 0 get a computed value and are marked estimated=True, so the
+# frontend can label them honestly as a forecast rather than presenting
+# them as tracked analytics.
+#
+# Ratios (deliberately conservative, mid-range industry figures, scaled
+# 0..1 by virality_score/100 so a higher-scoring post gets a stronger
+# forecast):
+#   reach_ratio          = 0.20 - 0.60 of followers
+#   impressions_factor   = 1.2x - 1.8x of reach (repeat views)
+#   like_ratio_of_reach  = 0.03 - 0.10 of reach
+#   comment_to_like_ratio = 0.15 (typical comments per like)
+#   share_to_like_ratio   = 0.05
+#   save_to_like_ratio    = 0.08
+
+def estimate_missing_engagement(
+    likes: Any,
+    comments: Any,
+    shares: Any,
+    saves: Any,
+    reach: Any,
+    impressions: Any,
+    follower_count: Any,
+    virality_score: float,
+) -> Dict[str, Dict[str, Any]]:
+
+    likes = _safe_int(likes)
+    comments = _safe_int(comments)
+    shares = _safe_int(shares)
+    saves = _safe_int(saves)
+    reach = _safe_int(reach)
+    impressions = _safe_int(impressions)
+    follower_count = _safe_int(follower_count)
+
+    virality_fraction = max(
+        0.0,
+        min(1.0, _safe_float(virality_score) / 100),
+    )
+
+    result: Dict[str, Dict[str, Any]] = {}
+
+    # --- Reach ---
+    if reach > 0:
+        result["reach"] = {"value": reach, "estimated": False}
+    else:
+        reach_ratio = 0.20 + 0.40 * virality_fraction
+        result["reach"] = {
+            "value": round(follower_count * reach_ratio),
+            "estimated": True,
+        }
+
+    effective_reach = result["reach"]["value"]
+
+    # --- Impressions ---
+    if impressions > 0:
+        result["impressions"] = {"value": impressions, "estimated": False}
+    else:
+        impressions_factor = 1.2 + 0.6 * virality_fraction
+        result["impressions"] = {
+            "value": round(effective_reach * impressions_factor),
+            "estimated": True,
+        }
+
+    # --- Likes ---
+    if likes > 0:
+        result["likes"] = {"value": likes, "estimated": False}
+        effective_likes = likes
+    else:
+        like_ratio = 0.03 + 0.07 * virality_fraction
+        estimated_likes = round(effective_reach * like_ratio)
+        result["likes"] = {"value": estimated_likes, "estimated": True}
+        effective_likes = estimated_likes
+
+    # --- Comments ---
+    if comments > 0:
+        result["comments"] = {"value": comments, "estimated": False}
+    else:
+        result["comments"] = {
+            "value": round(effective_likes * 0.15),
+            "estimated": True,
+        }
+
+    # --- Shares ---
+    if shares > 0:
+        result["shares"] = {"value": shares, "estimated": False}
+    else:
+        result["shares"] = {
+            "value": round(effective_likes * 0.05),
+            "estimated": True,
+        }
+
+    # --- Saves ---
+    if saves > 0:
+        result["saves"] = {"value": saves, "estimated": False}
+    else:
+        result["saves"] = {
+            "value": round(effective_likes * 0.08),
+            "estimated": True,
+        }
+
+    return result
+
+
+# ============================================================
+# ENGAGEMENT ANALYSIS (POST-PUBLISH PANEL)
+# ============================================================
+# Runs on every prediction that has a follower count and/or any real
+# engagement number to build a forecast from (see
+# estimate_missing_engagement above). Fields the user actually supplied
+# are used as-is; fields left at 0 are filled with a documented estimate
+# and flagged "estimated": True so the UI can label them honestly.
 
 def analyze_engagement(
     likes: int,
@@ -714,7 +935,10 @@ def analyze_engagement(
     follower_count: int = 0,
     reach: int = 0,
     impressions: int = 0,
+    estimated_fields: Optional[Dict[str, bool]] = None,
 ) -> Dict[str, Any]:
+
+    estimated_fields = estimated_fields or {}
 
     likes = _safe_int(likes)
     comments = _safe_int(comments)
@@ -766,11 +990,19 @@ def analyze_engagement(
         + saves
     )
 
+    # Engagement rate: prefer reach, then impressions, then fall back to
+    # follower count so a post with strong likes/comments/shares/saves but
+    # no reach/impressions data doesn't get flattened to a misleading
+    # 0.00%. engagement_rate_basis tells the caller which denominator was
+    # actually used, so the UI can label it honestly instead of always
+    # claiming "Relative to reach".
     if reach > 0:
 
         engagement_rate = (
             total_engagement / reach
         ) * 100
+
+        engagement_rate_basis = "reach"
 
     elif impressions > 0:
 
@@ -778,9 +1010,21 @@ def analyze_engagement(
             total_engagement / impressions
         ) * 100
 
+        engagement_rate_basis = "impressions"
+
+    elif follower_count > 0:
+
+        engagement_rate = (
+            total_engagement / follower_count
+        ) * 100
+
+        engagement_rate_basis = "followers"
+
     else:
 
         engagement_rate = 0.0
+
+        engagement_rate_basis = "none"
 
     def rate_status(rate: float) -> str:
 
@@ -879,42 +1123,59 @@ def analyze_engagement(
             "Continue testing the caption, timing, and content format."
         )
 
+    has_estimated_values = any(estimated_fields.values())
+
     return {
         "followers": follower_count,
         "reach": reach,
+        "reach_estimated": estimated_fields.get("reach", False),
         "impressions": impressions,
+        "impressions_estimated": estimated_fields.get("impressions", False),
         "likes": {
             "value": likes,
             "rate_vs_followers": round(like_rate, 4),
             "rate_vs_reach": round(reach_like_rate, 4),
             "status": rate_status(like_rate),
+            "estimated": estimated_fields.get("likes", False),
         },
         "comments": {
             "value": comments,
             "rate_vs_followers": round(comment_rate, 4),
             "rate_vs_reach": round(reach_comment_rate, 4),
             "status": rate_status(comment_rate),
+            "estimated": estimated_fields.get("comments", False),
         },
         "shares": {
             "value": shares,
             "rate_vs_followers": round(share_rate, 4),
             "rate_vs_reach": round(reach_share_rate, 4),
             "status": rate_status(share_rate),
+            "estimated": estimated_fields.get("shares", False),
         },
         "saves": {
             "value": saves,
             "rate_vs_followers": round(save_rate, 4),
             "rate_vs_reach": round(reach_save_rate, 4),
             "status": rate_status(save_rate),
+            "estimated": estimated_fields.get("saves", False),
         },
         "reach_rate": round(reach_rate, 4),
         "engagement_rate": round(engagement_rate, 4),
+        "engagement_rate_basis": engagement_rate_basis,
         "impressions_per_reached_user": round(
             impressions_per_reached_user,
             4
         ),
         "total_engagement": total_engagement,
         "recommended_actions": actions,
+        "has_estimated_values": has_estimated_values,
+        "estimate_note": (
+            "Values marked \"Estimated\" are a documented forecast based on "
+            "your follower count and the predicted virality score -- not "
+            "tracked analytics from a live post."
+            if has_estimated_values
+            else None
+        ),
     }
 
 
@@ -937,7 +1198,7 @@ def generate_ai_reasoning(
     parts = []
 
     parts.append(
-        f"The current ML virality probability is approximately "
+        f"The current AI virality probability is approximately "
         f"{virality_score:.1f}% based on the caption, category, timing, "
         f"and follower signals supplied before publishing."
     )
@@ -1011,9 +1272,16 @@ def generate_ai_reasoning(
 
         if engagement_rate > 0:
 
+            basis = engagement_analysis.get("engagement_rate_basis", "reach")
+            basis_label = {
+                "reach": "reach",
+                "impressions": "impression",
+                "followers": "follower",
+            }.get(basis, "reach")
+
             parts.append(
                 f"The supplied engagement signals produce an engagement rate of "
-                f"{engagement_rate:.2f}% relative to the available reach/impression data."
+                f"{engagement_rate:.2f}% relative to the available {basis_label} data."
             )
 
         if engagement_analysis["shares"]["value"] == 0:
@@ -1041,157 +1309,253 @@ def generate_top_improvements(
     posting_time: Dict,
     category: str,
     engagement_analysis: Optional[Dict] = None,
+    image_analysis: Optional[Dict[str, Any]] = None,
+    platform: str = "instagram",
 ) -> List[Dict[str, Any]]:
 
     improvements = []
 
-    rank = 1
+    rank_holder = {"n": 1}
+
+    def add(title, why, how, difficulty, time_required, stars):
+        improvements.append(
+            {
+                "rank": rank_holder["n"],
+                "title": title,
+                "why": why,
+                "how": how,
+                "difficulty": difficulty,
+                "time_required": time_required,
+                "stars": stars,
+            }
+        )
+        rank_holder["n"] += 1
+
+    # --------------------------------------------------------
+    # Primary weak points (unchanged from before)
+    # --------------------------------------------------------
 
     if caption_analysis["current_score"] < 75:
 
-        improvements.append(
-            {
-                "rank": rank,
-                "title": "Improve the Caption",
-                "why": (
-                    f"Current caption score is "
-                    f"{caption_analysis['current_score']}/100."
-                ),
-                "how": (
-                    "Add context, a stronger opening, a specific question, "
-                    "and a relevant call-to-action."
-                ),
-                "difficulty": "Easy",
-                "time_required": "2–3 minutes",
-                "stars": 5,
-            }
+        add(
+            "Improve the Caption",
+            f"Current caption score is {caption_analysis['current_score']}/100.",
+            "Add context, a stronger opening, a specific question, "
+            "and a relevant call-to-action.",
+            "Easy",
+            "2–3 minutes",
+            5,
         )
 
-        rank += 1
+    elif caption_analysis.get("problems"):
+
+        # Score is already decent (>=75) but a few smaller items remain --
+        # a lower-priority polish item listing exactly what's left,
+        # instead of staying silent once the score crosses the threshold.
+        add(
+            "Polish the Remaining Caption Details",
+            f"Caption score is already solid ({caption_analysis['current_score']}/100), "
+            "but a few smaller items are still open: "
+            + "; ".join(caption_analysis["problems"]),
+            "These are optional refinements -- address any that fit "
+            "naturally without padding the caption.",
+            "Easy",
+            "1–2 minutes",
+            3,
+        )
 
     if len(hashtag_analysis["current"]) < 4:
 
-        improvements.append(
-            {
-                "rank": rank,
-                "title": "Improve Hashtag Relevance",
-                "why": (
-                    "The current post has relatively few detected hashtags."
-                ),
-                "how": (
-                    "Use a small group of hashtags directly related to "
-                    f"the {category} topic."
-                ),
-                "difficulty": "Easy",
-                "time_required": "1 minute",
-                "stars": 4,
-            }
+        add(
+            "Improve Hashtag Relevance",
+            "The current post has relatively few detected hashtags.",
+            f"Use a small group of hashtags directly related to the {category} topic.",
+            "Easy",
+            "1 minute",
+            4,
         )
-
-        rank += 1
 
     if posting_time["performance"] == "Outside Suggested Window":
 
-        improvements.append(
-            {
-                "rank": rank,
-                "title": "Test a Better Posting Window",
-                "why": posting_time["reason"],
-                "how": (
-                    f"Test posting between "
-                    f"{posting_time['recommended_window']}."
-                ),
-                "difficulty": "Easy",
-                "time_required": "1 minute",
-                "stars": 4,
-            }
+        add(
+            "Test a Better Posting Window",
+            posting_time["reason"],
+            f"Test posting between {posting_time['recommended_window']}.",
+            "Easy",
+            "1 minute",
+            4,
         )
 
-        rank += 1
+    elif posting_time["performance"] == "Good":
 
-    # Only include engagement-driven improvements if real post-publish
-    # data was actually supplied.
+        # Already inside the window -- suggest narrowing in further
+        # rather than treating "Good" as nothing left to test.
+        add(
+            "Fine-Tune the Exact Posting Time",
+            f"The current time is already inside the suggested "
+            f"{posting_time['recommended_window']} window.",
+            "Test a few different times within this window across several "
+            "posts to find the strongest slot for this specific audience.",
+            "Easy",
+            "1 minute",
+            3,
+        )
+
+    # --------------------------------------------------------
+    # Engagement-driven (only if a forecast/real data is available --
+    # engagement_analysis may contain a mix of real + estimated fields;
+    # if estimated, the "why" text says so rather than presenting a
+    # forecast as a confirmed weakness.
+    # --------------------------------------------------------
+
     if engagement_analysis is not None:
+
+        estimated_note = (
+            " (based on the forecasted values above, not confirmed live data)"
+            if engagement_analysis.get("has_estimated_values")
+            else ""
+        )
 
         if engagement_analysis["shares"]["value"] == 0:
 
-            improvements.append(
-                {
-                    "rank": rank,
-                    "title": "Improve Shareability",
-                    "why": "No shares are currently recorded.",
-                    "how": (
-                        "Add a useful, surprising, practical, or emotionally "
-                        "relevant takeaway that people can send to others."
-                    ),
-                    "difficulty": "Medium",
-                    "time_required": "5–10 minutes",
-                    "stars": 5,
-                }
+            add(
+                "Improve Shareability",
+                f"No shares are currently recorded{estimated_note}.",
+                "Add a useful, surprising, practical, or emotionally "
+                "relevant takeaway that people can send to others.",
+                "Medium",
+                "5–10 minutes",
+                5,
             )
 
-            rank += 1
+        elif engagement_analysis["shares"]["status"] in ("No Data", "Low"):
+
+            add(
+                "Increase Shareability Further",
+                f"Share activity is currently rated \"{engagement_analysis['shares']['status']}\""
+                f"{estimated_note}.",
+                "Make the core idea easier to summarize in one line so "
+                "it's simple for someone to forward or repost.",
+                "Medium",
+                "5 minutes",
+                3,
+            )
 
         if engagement_analysis["saves"]["value"] == 0:
 
-            improvements.append(
-                {
-                    "rank": rank,
-                    "title": "Create a Save-Worthy Takeaway",
-                    "why": "No saves are currently recorded.",
-                    "how": (
-                        "Include a checklist, tip, tutorial, framework, "
-                        "or useful reference."
-                    ),
-                    "difficulty": "Medium",
-                    "time_required": "5–10 minutes",
-                    "stars": 4,
-                }
+            add(
+                "Create a Save-Worthy Takeaway",
+                f"No saves are currently recorded{estimated_note}.",
+                "Include a checklist, tip, tutorial, framework, or useful reference.",
+                "Medium",
+                "5–10 minutes",
+                4,
             )
 
-            rank += 1
+        elif engagement_analysis["saves"]["status"] in ("No Data", "Low"):
+
+            add(
+                "Strengthen Save-Worthiness",
+                f"Save activity is currently rated \"{engagement_analysis['saves']['status']}\""
+                f"{estimated_note}.",
+                "Add a specific, reusable piece of information (a number, "
+                "step, or reference) that's worth revisiting later.",
+                "Medium",
+                "5 minutes",
+                3,
+            )
+
+        if engagement_analysis["comments"]["status"] in ("No Data", "Low"):
+
+            add(
+                "Encourage More Comments",
+                f"Comment activity is currently rated \"{engagement_analysis['comments']['status']}\""
+                f"{estimated_note}.",
+                "Ask a direct, specific, easy-to-answer question instead "
+                "of a general one -- specificity drives replies.",
+                "Easy",
+                "1–2 minutes",
+                4,
+            )
 
         if engagement_analysis["reach_rate"] < 20:
 
-            improvements.append(
-                {
-                    "rank": rank,
-                    "title": "Improve Initial Distribution",
-                    "why": (
-                        "The supplied reach is relatively low compared with "
-                        "the follower count."
-                    ),
-                    "how": (
-                        "Strengthen the first line, use a clearer topic, "
-                        "and distribute the post to relevant existing audiences."
-                    ),
-                    "difficulty": "Medium",
-                    "time_required": "10–15 minutes",
-                    "stars": 4,
-                }
+            add(
+                "Improve Initial Distribution",
+                f"The reach is relatively low compared with the follower count{estimated_note}.",
+                "Strengthen the first line, use a clearer topic, and "
+                "distribute the post to relevant existing audiences.",
+                "Medium",
+                "10–15 minutes",
+                4,
             )
-            rank += 1
+
+    # --------------------------------------------------------
+    # Image-driven (only for real computed image features -- the
+    # dict has a "brightness" key only when _build_image_analysis()
+    # in app.py actually ran against a decoded image)
+    # --------------------------------------------------------
+
+    if image_analysis and "brightness" in image_analysis:
+
+        if image_analysis.get("detail_label") == "Low visual detail / smooth":
+
+            add(
+                "Add More Visual Detail",
+                "The image reads as low-detail / smooth, which can blend "
+                "into a feed rather than stopping the scroll.",
+                "Consider a version with more texture, a closer crop, or "
+                "an added visual element for the next post.",
+                "Medium",
+                "Varies",
+                3,
+            )
+
+        if image_analysis.get("saturation_label") == "Muted / low saturation":
+
+            add(
+                "Boost Color Saturation",
+                "The image's colors are currently muted, which can reduce "
+                "visual pop in a crowded feed.",
+                "A modest saturation/vibrance boost in editing can make the "
+                "image stand out more without looking unnatural.",
+                "Easy",
+                "1–2 minutes",
+                3,
+            )
+
+        platform_key = _resolve_platform_key(platform)
+        composition = image_analysis.get("composition")
+
+        # Reels/carousel-style platforms lean portrait; feed/thought-
+        # leadership platforms lean landscape or square. Only flagged
+        # when there's a real mismatch against the platform actually
+        # selected -- not a universal rule.
+        if platform_key in ("instagram", "facebook") and composition == "Landscape orientation":
+
+            add(
+                "Consider a Portrait Crop",
+                f"This platform's Reels/carousel formats typically favor "
+                f"portrait content; the current image is in {composition.lower()}.",
+                "A portrait or square crop may perform better in the feed "
+                "than the current landscape framing.",
+                "Easy",
+                "1–2 minutes",
+                2,
+            )
 
     if not improvements:
 
-        improvements.append(
-            {
-                "rank": 1,
-                "title": "Continue Testing",
-                "why": (
-                    "The supplied signals do not show a major weakness."
-                ),
-                "how": (
-                    "Continue testing variations in caption, timing, "
-                    "hashtags, and content format."
-                ),
-                "difficulty": "Easy",
-                "time_required": "Ongoing",
-                "stars": 4,
-            }
+        add(
+            "Continue Testing",
+            "The supplied signals do not show a major weakness.",
+            "Continue testing variations in caption, timing, hashtags, and content format.",
+            "Easy",
+            "Ongoing",
+            4,
         )
 
-    return improvements[:5]
+    return improvements[:6]
 
 
 # ============================================================
@@ -1276,7 +1640,21 @@ def generate_explainable_ai(
     posting_time: Optional[Dict[str, Any]] = None,
     hashtag_count: int = 0,
     engagement_analysis: Optional[Dict[str, Any]] = None,
+    virality_score: float = 0.0,
+    image_analysis: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """
+    Each factor now carries a "status" (Strong / Moderate / Needs
+    Attention / Informational) computed directly from real, already-known
+    numbers -- caption score, hashtag count, posting-time performance,
+    engagement rate/reach rate thresholds already used elsewhere in this
+    file, and (for Image Quality) the real computed image features from
+    app.py's _build_image_analysis(). This is NOT trained-model SHAP
+    feature importance (that lives in config/shap_top_features.json from
+    train_pipeline.py) -- it's a transparent, rule-based read of the same
+    inputs already shown elsewhere in the report, so the UI has something
+    real to color-code instead of an always-None "influence" value.
+    """
 
     factors = []
 
@@ -1287,53 +1665,126 @@ def generate_explainable_ai(
         caption_analysis.get("current_score")
     )
 
-    # These are NOT claimed as trained-model SHAP feature importance --
-    # that lives in config/shap_top_features.json from train_pipeline.py.
-    # These are recommendation-engine observations about the input.
+    virality_score = _safe_float(virality_score)
+
+    def rate_bucket(rate: float) -> str:
+        if rate <= 0:
+            return "Informational"
+        if rate < 3:
+            return "Needs Attention"
+        if rate < 7:
+            return "Moderate"
+        return "Strong"
+
+    # --- ML Virality Probability ---
+    if virality_score >= 70:
+        virality_status = "Strong"
+    elif virality_score >= 45:
+        virality_status = "Moderate"
+    elif virality_score > 0:
+        virality_status = "Needs Attention"
+    else:
+        virality_status = "Informational"
+
     factors.append(
         {
-            "name": "ML Virality Probability",
-            "influence": None,
+            "name": "AI Virality Probability",
+            "status": virality_status,
             "description": (
-                "Primary prediction comes from the trained ML model, based "
-                "on caption text, sentiment, category, timing, and follower count."
+                f"Primary prediction is {virality_score:.1f}%, from the trained "
+                "ML model based on caption text, sentiment, category, timing, "
+                "and follower count."
             ),
         }
     )
 
+    # --- Caption Quality ---
+    if caption_score >= 75:
+        caption_status = "Strong"
+    elif caption_score >= 55:
+        caption_status = "Moderate"
+    else:
+        caption_status = "Needs Attention"
+
     factors.append(
         {
             "name": "Caption Quality",
-            "influence": None,
+            "status": caption_status,
             "description": (
                 f"Caption structure score is {caption_score:.0f}/100."
             ),
         }
     )
 
+    # --- Posting Time ---
+    performance = posting_time.get("performance", "Unknown")
+
+    if performance == "Good":
+        posting_status = "Strong"
+    elif performance == "Outside Suggested Window":
+        posting_status = "Needs Attention"
+    else:
+        posting_status = "Informational"
+
     factors.append(
         {
             "name": "Posting Time",
-            "influence": None,
-            "description": (
-                f"Current timing status: "
-                f"{posting_time.get('performance', 'Unknown')}."
-            ),
+            "status": posting_status,
+            "description": f"Current timing status: {performance}.",
         }
     )
+
+    # --- Hashtags ---
+    if hashtag_count >= 4:
+        hashtag_status = "Strong"
+    elif hashtag_count >= 1:
+        hashtag_status = "Moderate"
+    else:
+        hashtag_status = "Needs Attention"
 
     factors.append(
         {
             "name": "Hashtags",
-            "influence": None,
+            "status": hashtag_status,
             "description": (
                 f"{hashtag_count} hashtag(s) detected in the submitted input."
             ),
         }
     )
 
-    # Only include engagement-derived factors if real post-publish data
-    # was actually supplied.
+    # --- Image Quality (only for real computed image features) ---
+    if image_analysis and "brightness" in image_analysis:
+
+        issues = 0
+
+        if image_analysis.get("detail_label") == "Low visual detail / smooth":
+            issues += 1
+
+        if image_analysis.get("saturation_label") == "Muted / low saturation":
+            issues += 1
+
+        if issues == 0:
+            image_status = "Strong"
+        elif issues == 1:
+            image_status = "Moderate"
+        else:
+            image_status = "Needs Attention"
+
+        factors.append(
+            {
+                "name": "Image Quality",
+                "status": image_status,
+                "description": (
+                    f"{image_analysis.get('brightness_label', 'Unknown')} brightness, "
+                    f"{str(image_analysis.get('saturation_label', 'unknown')).lower()}, "
+                    f"{str(image_analysis.get('detail_label', 'unknown')).lower()}, "
+                    f"{str(image_analysis.get('tone', 'unknown')).lower()}."
+                ),
+            }
+        )
+
+    # Only include engagement-derived factors if real/forecast post-publish
+    # data is actually available.
     if engagement_analysis is not None:
 
         engagement_rate = _safe_float(
@@ -1344,24 +1795,41 @@ def generate_explainable_ai(
             engagement_analysis.get("reach_rate")
         )
 
-        factors.append(
-            {
-                "name": "Engagement Signals",
-                "influence": None,
-                "description": (
-                    f"Likes, comments, shares and saves are currently "
-                    f"{engagement_analysis.get('total_engagement', 0)} in total."
-                ),
-            }
+        estimated_suffix = (
+            " (includes forecasted values)"
+            if engagement_analysis.get("has_estimated_values")
+            else ""
         )
 
         factors.append(
             {
-                "name": "Audience Reach",
-                "influence": None,
+                "name": "Engagement Signals",
+                "status": rate_bucket(engagement_rate),
                 "description": (
-                    f"Reach is {engagement_analysis.get('reach', 0)} "
-                    f"against {engagement_analysis.get('followers', 0)} followers."
+                    f"Likes, comments, shares and saves are currently "
+                    f"{engagement_analysis.get('total_engagement', 0)} in total"
+                    f"{estimated_suffix}."
+                ),
+            }
+        )
+
+        if reach_rate >= 50:
+            reach_status = "Strong"
+        elif reach_rate >= 20:
+            reach_status = "Moderate"
+        elif reach_rate > 0:
+            reach_status = "Needs Attention"
+        else:
+            reach_status = "Informational"
+
+        factors.append(
+            {
+                "name": "Audience Reach",
+                "status": reach_status,
+                "description": (
+                    f"Reach is {engagement_analysis.get('reach', 0)} against "
+                    f"{engagement_analysis.get('followers', 0)} followers"
+                    f"{estimated_suffix}."
                 ),
             }
         )
@@ -1371,9 +1839,11 @@ def generate_explainable_ai(
             factors.append(
                 {
                     "name": "Engagement Rate",
-                    "influence": None,
+                    "status": rate_bucket(engagement_rate),
                     "description": (
-                        f"Calculated engagement rate: {engagement_rate:.2f}%."
+                        f"Calculated engagement rate: {engagement_rate:.2f}% "
+                        f"(relative to {engagement_analysis.get('engagement_rate_basis', 'reach')})"
+                        f"{estimated_suffix}."
                     ),
                 }
             )
@@ -1383,9 +1853,14 @@ def generate_explainable_ai(
             factors.append(
                 {
                     "name": "Reach Rate",
-                    "influence": None,
+                    "status": (
+                        "Strong" if reach_rate >= 50
+                        else "Moderate" if reach_rate >= 20
+                        else "Needs Attention"
+                    ),
                     "description": (
-                        f"Reach represents {reach_rate:.2f}% of the supplied follower count."
+                        f"Reach represents {reach_rate:.2f}% of the supplied "
+                        f"follower count{estimated_suffix}."
                     ),
                 }
             )
@@ -1479,6 +1954,7 @@ def build_full_recommendation(
         category=category,
         current_hashtags=current_hashtags,
         keywords=keywords,
+        caption=caption,
     )
 
     # --------------------------------------------------------
@@ -1491,26 +1967,48 @@ def build_full_recommendation(
     )
 
     # --------------------------------------------------------
-    # Engagement (only if real post-publish numbers were supplied)
+    # Engagement (real post-publish numbers where supplied, forecast
+    # estimates filling in anything left at 0 -- see
+    # estimate_missing_engagement above for the documented formula)
     # --------------------------------------------------------
 
-    have_engagement_data = any(
-        v is not None for v in (likes, comments, shares, saves, reach, impressions)
+    have_forecast_basis = follower_count > 0 or any(
+        _safe_int(v) > 0
+        for v in (likes, comments, shares, saves, reach, impressions)
+        if v is not None
     )
 
-    engagement = (
-        analyze_engagement(
+    if have_forecast_basis:
+
+        filled = estimate_missing_engagement(
             likes=likes or 0,
             comments=comments or 0,
             shares=shares or 0,
             saves=saves or 0,
-            follower_count=follower_count,
             reach=reach or 0,
             impressions=impressions or 0,
+            follower_count=follower_count,
+            virality_score=virality_score,
         )
-        if have_engagement_data
-        else None
-    )
+
+        estimated_fields = {
+            key: block["estimated"] for key, block in filled.items()
+        }
+
+        engagement = analyze_engagement(
+            likes=filled["likes"]["value"],
+            comments=filled["comments"]["value"],
+            shares=filled["shares"]["value"],
+            saves=filled["saves"]["value"],
+            follower_count=follower_count,
+            reach=filled["reach"]["value"],
+            impressions=filled["impressions"]["value"],
+            estimated_fields=estimated_fields,
+        )
+
+    else:
+
+        engagement = None
 
     # --------------------------------------------------------
     # Reasoning
@@ -1529,6 +2027,20 @@ def build_full_recommendation(
     )
 
     # --------------------------------------------------------
+    # Image analysis (resolved here so Top Improvements and Explainable
+    # AI below can use the real computed features, not just echo them
+    # back further down in the report)
+    # --------------------------------------------------------
+
+    final_image_analysis = image_analysis or {
+        "status": "No detailed image analysis provided",
+        "note": (
+            "The current prediction system primarily uses caption and "
+            "metadata features. No image-trained virality model is being claimed."
+        ),
+    }
+
+    # --------------------------------------------------------
     # Improvements
     # --------------------------------------------------------
 
@@ -1538,6 +2050,8 @@ def build_full_recommendation(
         posting_time=posting_time,
         category=category,
         engagement_analysis=engagement,
+        image_analysis=final_image_analysis,
+        platform=platform,
     )
 
     # --------------------------------------------------------
@@ -1669,19 +2183,9 @@ def build_full_recommendation(
         posting_time=posting_time,
         hashtag_count=len(current_hashtags),
         engagement_analysis=engagement,
+        virality_score=virality_score,
+        image_analysis=final_image_analysis,
     )
-
-    # --------------------------------------------------------
-    # Image analysis
-    # --------------------------------------------------------
-
-    final_image_analysis = image_analysis or {
-        "status": "No detailed image analysis provided",
-        "note": (
-            "The current prediction system primarily uses caption and "
-            "metadata features. No image-trained virality model is being claimed."
-        ),
-    }
 
     # --------------------------------------------------------
     # Final report
@@ -1707,7 +2211,7 @@ def build_full_recommendation(
 
         "posting_time": posting_time,
 
-        "engagement_analysis": engagement,  # None for the normal pre-publish flow
+        "engagement_analysis": engagement,  # None only when there's no follower count or engagement numbers to forecast from
 
         "image_analysis": final_image_analysis,
 

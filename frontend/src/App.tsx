@@ -8,6 +8,7 @@ import PredictionView from "./components/PredictionView";
 import AnalyticsView from "./components/AnalyticsView";
 import AuthModal from "./components/AuthModal";
 import AuthGateView from "./components/AuthGateView";
+import AIConsultantModal, { AdvisorContext } from "./components/AIConsultantModal";
 
 import {
   auth,
@@ -22,28 +23,9 @@ import type {
   PredictApiResponse,
   HistoryEntry,
 } from "./types";
+import { DEFAULT_INPUT } from "./types";
 
 const API_BASE_URL = "";
-
-const DEFAULT_INPUT: PredictionFormState = {
-  caption: "",
-  post_hour: 18,
-  day_of_week: 1,
-  follower_count: 5000,
-  early_likes: 0,
-  early_comments: 0,
-  early_shares: 0,
-  saves: 0,
-  reach: 0,
-  impressions: 0,
-  media_type: "image",
-  content_category: "Lifestyle",
-  platform: "Instagram",
-  model: "ensemble",
-  keywords: "",
-  hashtags: "",
-  image: null,
-};
 
 function App() {
   const [activeTab, setActiveTab] =
@@ -60,6 +42,10 @@ function App() {
 
   const [authModalMode, setAuthModalMode] =
     useState<"login" | "signup">("login");
+
+  // AI Advisor / Consultant chat modal.
+  const [chatModalOpen, setChatModalOpen] =
+    useState(false);
 
   const [predictionInput, setPredictionInput] =
     useState<PredictionFormState>(DEFAULT_INPUT);
@@ -919,9 +905,7 @@ function App() {
             onOpenCommandPalette={() => {}}
 
             onOpenChat={() =>
-              setActiveTab(
-                "prediction"
-              )
+              setChatModalOpen(true)
             }
 
             currentUser={
@@ -1016,6 +1000,52 @@ function App() {
               setAuthModalOpen(
                 false
               )
+            }
+          />
+
+          {/* ====================================================
+              AI ADVISOR / CONSULTANT CHAT MODAL
+          ==================================================== */}
+
+          <AIConsultantModal
+            isOpen={chatModalOpen}
+            onClose={() => setChatModalOpen(false)}
+            context={
+              hasAnalyzed && apiResponse?.recommendation_report
+                ? {
+                    caption: predictionInput.caption || "",
+                    platform: predictionInput.platform || "",
+                    category:
+                      apiResponse.recommendation_report.category ||
+                      predictionInput.content_category ||
+                      "",
+                    mediaType: predictionInput.media_type || "",
+                    viralityScore: Math.round(
+                      Number(apiResponse.prediction?.viral_probability ?? 0) * 100
+                    ),
+                    strengths: apiResponse.recommendation_report.strengths || [],
+                    weaknesses: apiResponse.recommendation_report.weaknesses || [],
+                    suggestedHashtags:
+                      apiResponse.recommendation_report.suggested_hashtags?.recommended || [],
+                    postingTime: apiResponse.recommendation_report.posting_time
+                      ? {
+                          current_time:
+                            apiResponse.recommendation_report.posting_time.current_time,
+                          recommended_window:
+                            apiResponse.recommendation_report.posting_time.recommended_window,
+                          performance:
+                            apiResponse.recommendation_report.posting_time.performance,
+                        }
+                      : null,
+                    topImprovements: (
+                      apiResponse.recommendation_report.top_improvements || []
+                    ).map((imp) => ({
+                      title: imp.title,
+                      why: imp.why,
+                      how: imp.how,
+                    })),
+                  }
+                : null
             }
           />
 
