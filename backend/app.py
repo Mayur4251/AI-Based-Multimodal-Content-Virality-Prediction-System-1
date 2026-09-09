@@ -170,16 +170,17 @@ def _build_image_analysis(image_features: dict) -> dict:
 
 @app.post("/api/predict")
 def predict(data: PredictionRequest):
-    try:
-        # ml_payload: EXACTLY the pre-publish fields the trained model
-        # uses. This is what goes to predict_virality() -- never touch
-        # this to add post-publish fields, or you recreate the original
-        # leakage bug.
         ml_payload = {
             "caption": data.caption,
             "post_hour": data.post_hour,
             "day_of_week": data.day_of_week,
             "follower_count": data.follower_count,
+            "early_likes": data.early_likes,
+            "early_comments": data.early_comments,
+            "early_shares": data.early_shares,
+            "saves": data.saves,
+            "reach": data.reach,
+            "impressions": data.impressions,
             "media_type": data.media_type,
             "content_category": data.content_category,
             "platform": data.platform,
@@ -234,6 +235,58 @@ def predict(data: PredictionRequest):
                 "explainability",
                 {}
             )
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# -------------------------------
+# Suggestion verification API
+# -------------------------------
+# NEW: lightweight scoring endpoint used by server.ts to verify a
+# suggested change (caption rewrite, hashtag set, posting time) against
+# the REAL trained model BEFORE presenting it as something the user
+# should apply. Previously, "Apply Suggestion" buttons assumed every
+# suggestion improved the score -- they never actually re-ran the model
+# to check, which is why applying one could (and did) make the score go
+# down. This reuses predict_virality() exactly as /api/predict does; it
+# just skips building the full recommendation report since callers only
+# need the resulting probability to compute a before/after delta.
+#
+# Reuses the PredictionRequest schema so the caller (server.ts) can pass
+# the original prediction payload with one field swapped (caption,
+# hashtags, or post_hour) without needing a second schema to stay in
+# sync with. The post-publish engagement fields on PredictionRequest are
+# accepted but unused here, same as in predict_virality().
+
+@app.post("/api/score-variant")
+def score_variant(data: PredictionRequest):
+    try:
+        ml_payload = {
+            "caption": data.caption,
+            "post_hour": data.post_hour,
+            "day_of_week": data.day_of_week,
+            "follower_count": data.follower_count,
+            "media_type": data.media_type,
+            "content_category": data.content_category,
+            "platform": data.platform,
+            "keywords": data.keywords,
+            "hashtags": data.hashtags,
+            "imageBase64": data.imageBase64,
+        }
+        result = predict_virality(
+            ml_payload,
+            model=data.model
+        )
+        return {
+            "success": True,
+            "viral": result["viral"],
+            "viral_probability": result["viral_probability"],
         }
 
     except Exception as e:

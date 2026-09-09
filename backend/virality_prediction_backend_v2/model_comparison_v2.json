@@ -1,0 +1,42 @@
+[
+  {
+    "model":"Random Forest (tuned)",
+    "accuracy":0.8862,
+    "precision":0.7914,
+    "recall":0.74,
+    "f1_score":0.7649,
+    "roc_auc":0.947
+  },
+  {
+    "model":"Extra Trees (tuned)",
+    "accuracy":0.8213,
+    "precision":0.7568,
+    "recall":0.42,
+    "f1_score":0.5402,
+    "roc_auc":0.8875
+  },
+  {
+    "model":"XGBoost (tuned)",
+    "accuracy":0.9313,
+    "precision":0.8372,
+    "recall":0.9,
+    "f1_score":0.8675,
+    "roc_auc":0.9796
+  },
+  {
+    "model":"CatBoost (tuned)",
+    "accuracy":0.9269,
+    "precision":0.8253,
+    "recall":0.8975,
+    "f1_score":0.8599,
+    "roc_auc":0.9771
+  },
+  {
+    "model":"Stacking Ensemble",
+    "accuracy":0.8694,
+    "precision":0.8282,
+    "recall":0.6025,
+    "f1_score":0.6975,
+    "roc_auc":0.9331
+  }
+]

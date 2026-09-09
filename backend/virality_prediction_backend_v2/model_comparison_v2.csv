@@ -1,0 +1,6 @@
+model,accuracy,precision,recall,f1_score,roc_auc
+Random Forest (tuned),0.8862,0.7914,0.74,0.7649,0.947
+Extra Trees (tuned),0.8213,0.7568,0.42,0.5402,0.8875
+XGBoost (tuned),0.9313,0.8372,0.9,0.8675,0.9796
+CatBoost (tuned),0.9269,0.8253,0.8975,0.8599,0.9771
+Stacking Ensemble,0.8694,0.8282,0.6025,0.6975,0.9331

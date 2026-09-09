@@ -4,28 +4,14 @@
     "post_hour",
     "day_of_week",
     "follower_count",
+    "early_likes",
+    "early_shares",
+    "early_comments",
+    "saves",
+    "reach",
+    "impressions",
     "caption_len",
-    "caption_word_count",
-    "hook_score",
-    "hashtag_count",
-    "img_brightness_mean",
-    "img_brightness_std",
-    "img_saturation_mean",
-    "img_saturation_std",
-    "img_colorfulness",
-    "img_edge_density",
-    "img_warm_ratio",
-    "img_aspect_ratio"
-  ],
-  "image_feature_columns": [
-    "img_brightness_mean",
-    "img_brightness_std",
-    "img_saturation_mean",
-    "img_saturation_std",
-    "img_colorfulness",
-    "img_edge_density",
-    "img_warm_ratio",
-    "img_aspect_ratio"
+    "caption_word_count"
   ],
   "sentiment_columns": [
     "sent_neg",
@@ -38,23 +24,10 @@
     "content_category"
   ],
   "target_column": "viral",
-  "excluded_columns": [
+  "dropped_leakage_columns": [
     "engagement_rate",
-    "performance_bucket_label",
-    "early_likes",
-    "early_shares",
-    "early_comments",
-    "saves",
-    "reach",
-    "impressions",
-    "viral_probability"
+    "performance_bucket_label"
   ],
-  "id_columns_not_used_as_features": [
-    "post_id",
-    "image_id",
-    "image_name",
-    "image_path"
-  ],
-  "split_strategy": "GroupShuffleSplit on image_id (test_size=0.2) -- prevents the same image appearing in both train and test across its multiple captions.",
-  "note": "early_likes/early_shares/early_comments/saves/reach/impressions are POST-PUBLISH outcomes and are never used as features, at train time or inference time. Image features are handcrafted (see image_features.py), computed identically at train and inference time."
+  "best_model": "XGBoost (tuned)",
+  "class_imbalance_handling": "SMOTE oversampling on training fold only"
 }

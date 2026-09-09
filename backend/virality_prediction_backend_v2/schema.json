@@ -1,0 +1,33 @@
+{
+  "text_column": "caption",
+  "metadata_numeric_columns": [
+    "post_hour",
+    "day_of_week",
+    "follower_count",
+    "early_likes",
+    "early_shares",
+    "early_comments",
+    "saves",
+    "reach",
+    "impressions",
+    "caption_len",
+    "caption_word_count"
+  ],
+  "sentiment_columns": [
+    "sent_neg",
+    "sent_neu",
+    "sent_pos",
+    "sent_compound"
+  ],
+  "categorical_columns": [
+    "media_type",
+    "content_category"
+  ],
+  "target_column": "viral",
+  "dropped_leakage_columns": [
+    "engagement_rate",
+    "performance_bucket_label"
+  ],
+  "best_model": "XGBoost (tuned)",
+  "class_imbalance_handling": "SMOTE oversampling on training fold only"
+}

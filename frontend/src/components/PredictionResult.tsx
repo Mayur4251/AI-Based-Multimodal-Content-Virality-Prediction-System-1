@@ -3,6 +3,7 @@ import type {
   BackendPrediction,
   RecommendationData,
   PredictionFormState,
+  PredictedImpact,
 } from "../types";
 
 interface PredictionResultProps {
@@ -32,6 +33,23 @@ function parseWindowStartHour(window: string | undefined): number | null {
 }
 
 /**
+ * A suggestion is only ever safe to offer/apply if the backend either
+ * hasn't verified it yet (impact undefined -- the score-variant endpoint
+ * can fail silently, a deliberate non-blocking failure mode) or has
+ * verified it and the score genuinely goes up (or stays flat).
+ *
+ * This is the single gate that guarantees "applying a suggestion only
+ * increases the score": nothing downstream renders an Apply button
+ * unless this returns true. A verified negative impact is not shown
+ * with a warning color anymore -- it's withheld entirely, because a
+ * suggestion this app knows will hurt the score isn't a suggestion.
+ */
+function isSafeToOffer(impact: PredictedImpact | undefined): boolean {
+  if (!impact) return true; // unverified -- best effort, same as before this feature existed
+  return impact.delta_points >= 0;
+}
+
+/**
  * Weakness strings (from recommendation_engine.py) that are all resolved
  * by the SAME fix -- rewriting the caption. These get grouped into one
  * consolidated suggestion box instead of one identical box per weakness.
@@ -52,11 +70,12 @@ function isCaptionWeakness(weakness: string): boolean {
 
 /**
  * Maps a non-caption weakness string to a suggested fix + an apply action
- * that updates the actual form field it refers to. Caption-related
- * weaknesses are handled separately as a single grouped suggestion (see
- * isCaptionWeakness / the grouped block in the Weaknesses card) rather
- * than through this function, so each one doesn't get its own identical
- * "apply caption rewrite" box. Engagement-related weaknesses (no
+ * that updates the actual form field it refers to. Returns null (no
+ * suggestion offered) both when there's genuinely nothing to suggest AND
+ * when the backend has verified the suggestion would lower the score --
+ * see isSafeToOffer. Caption-related weaknesses are handled separately
+ * as a single grouped suggestion (see isCaptionWeakness / the grouped
+ * block in the Weaknesses card). Engagement-related weaknesses (no
  * shares/saves/comments recorded, low reach) don't get a suggestion at
  * all -- there's no legitimate value to auto-fill for those without
  * fabricating post-publish data.
@@ -73,6 +92,7 @@ function getSuggestion(
   const w = weakness.toLowerCase();
 
   if (w.includes("hashtag(s) detected") && suggestedHashtags?.recommended?.length) {
+    if (!isSafeToOffer(suggestedHashtags.predicted_impact)) return null;
     const tags = suggestedHashtags.recommended.join(", ");
     return {
       text: `Use: ${tags}`,
@@ -86,6 +106,7 @@ function getSuggestion(
   }
 
   if (w.includes("posting time") && w.includes("outside")) {
+    if (!isSafeToOffer(postingTime?.predicted_impact)) return null;
     const startHour = parseWindowStartHour(postingTime?.recommended_window);
     if (startHour !== null) {
       const label12 =
@@ -145,6 +166,12 @@ export default function PredictionResult({
   const otherWeaknesses = weaknesses
     .map((w, i) => ({ w, i }))
     .filter(({ w }) => !isCaptionWeakness(w));
+
+  // Gate the three standalone "use this" buttons the same way -- a
+  // verified-negative suggestion never gets an apply path anywhere in
+  // this component, not just inside the Weaknesses card.
+  const captionSuggestionSafe = isSafeToOffer(captionAnalysis?.predicted_impact);
+  const hashtagSuggestionSafe = isSafeToOffer(suggestedHashtags?.predicted_impact);
 
   return (
     <section className="mt-8 space-y-5">
@@ -266,11 +293,15 @@ export default function PredictionResult({
             {weaknesses.length > 0 ? (
               <>
                 {/* Caption-related weaknesses: grouped under one shared fix,
-                    since a single rewrite resolves all of them at once. */}
+                    since a single rewrite resolves all of them at once.
+                    The fix box only renders when it's safe to offer --
+                    see isSafeToOffer -- otherwise the weaknesses still
+                    list, just without a rewrite attached. */}
                 {captionWeaknesses.length > 0 && (() => {
                   const key = "caption-group";
                   const applied = appliedKeys.has(key);
                   const suggested = captionAnalysis?.ai_suggested_caption;
+                  const safe = captionSuggestionSafe;
 
                   return (
                     <div className="space-y-1.5">
@@ -281,7 +312,7 @@ export default function PredictionResult({
                         </div>
                       ))}
 
-                      {suggested && onInputChange && predictionInput && (
+                      {suggested && safe && onInputChange && predictionInput && (
                         <div className="ml-5 rounded-lg bg-[#191923] border border-slate-800 p-2.5">
                           <p className="text-[9px] uppercase text-slate-500 mb-1">
                             One rewrite fixes all {captionWeaknesses.length} of the above
@@ -307,11 +338,20 @@ export default function PredictionResult({
                           </button>
                         </div>
                       )}
+
+                      {suggested && !safe && (
+                        <p className="ml-5 text-[10px] leading-5 text-slate-500">
+                          No caption rewrite currently improves the score enough to
+                          recommend one -- your current caption is being kept.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}
 
-                {/* Non-caption weaknesses: unchanged, one suggestion each */}
+                {/* Non-caption weaknesses: one suggestion each, withheld
+                    entirely (via getSuggestion -> isSafeToOffer) when the
+                    verified impact is negative. */}
                 {otherWeaknesses.map(({ w, i }) => {
                   const suggestion = getSuggestion(
                     w,
@@ -428,7 +468,7 @@ export default function PredictionResult({
                 <p className="text-[9px] uppercase text-slate-500">
                   Suggested Rewrite
                 </p>
-                {onInputChange && predictionInput && (
+                {onInputChange && predictionInput && captionSuggestionSafe && (
                   <button
                     type="button"
                     onClick={() =>
@@ -437,7 +477,7 @@ export default function PredictionResult({
                         caption: captionAnalysis.ai_suggested_caption,
                       }))
                     }
-                    className="rounded-md bg-purple-600 hover:bg-purple-500 px-2.5 py-1 text-[10px] font-semibold text-white transition"
+                    className="rounded-md px-2.5 py-1 text-[10px] font-semibold transition bg-purple-600 hover:bg-purple-500 text-white"
                   >
                     Use This Caption
                   </button>
@@ -447,6 +487,12 @@ export default function PredictionResult({
                 <p className="text-xs leading-6 text-slate-300 whitespace-pre-line">
                   {captionAnalysis.ai_suggested_caption}
                 </p>
+                {!captionSuggestionSafe && (
+                  <p className="mt-2 text-[10px] leading-5 text-slate-500">
+                    The model already favors your current caption over this rewrite,
+                    so it isn't offered as an apply-able suggestion.
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -462,7 +508,7 @@ export default function PredictionResult({
               <h3 className="text-[10px] font-bold uppercase tracking-widest text-pink-400">
                 Suggested Hashtags
               </h3>
-              {onInputChange && predictionInput && suggestedHashtags.recommended.length > 0 && (
+              {onInputChange && predictionInput && suggestedHashtags.recommended.length > 0 && hashtagSuggestionSafe && (
                 <button
                   type="button"
                   onClick={() =>
@@ -472,7 +518,7 @@ export default function PredictionResult({
                       keywords: suggestedHashtags.recommended.join(", "),
                     }))
                   }
-                  className="rounded-md bg-purple-600 hover:bg-purple-500 px-2.5 py-1 text-[10px] font-semibold text-white transition"
+                  className="rounded-md px-2.5 py-1 text-[10px] font-semibold transition bg-purple-600 hover:bg-purple-500 text-white"
                 >
                   Use These
                 </button>
@@ -492,6 +538,12 @@ export default function PredictionResult({
                 <span className="text-xs text-slate-500">No hashtags generated.</span>
               )}
             </div>
+            {!hashtagSuggestionSafe && suggestedHashtags.recommended.length > 0 && (
+              <p className="mt-2 text-[10px] leading-5 text-slate-500">
+                The model already favors your current hashtags over this set, so
+                it isn't offered as an apply-able suggestion.
+              </p>
+            )}
             {suggestedHashtags.reason && (
               <p className="mt-3 text-[10px] leading-5 text-slate-500">
                 {suggestedHashtags.reason}

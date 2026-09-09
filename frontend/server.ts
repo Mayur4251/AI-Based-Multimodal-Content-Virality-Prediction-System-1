@@ -117,31 +117,6 @@ function getSimulatedChatResponse(message: string, context?: any) {
 
 // ------------------------------------------------------------
 // AI Advisor context -> Gemini system instruction
-//
-// Builds a system prompt that includes the ACTUAL current prediction
-// result (caption, score, strengths/weaknesses, etc.) when the frontend
-// sends one, so the advisor can answer using real data instead of
-// asking the user to re-paste it. Falls back to an honest "no
-// prediction yet" instruction when context is absent -- never pretends
-// to have data it doesn't.
-//
-// UPDATED (this pass): two correctness fixes based on real chat output
-// review --
-//
-// 1. Gemini was fabricating a numeric "caption score" (e.g. "83/100")
-//    that does not exist anywhere in AdvisorContext, and was also
-//    stating a precise new predicted percentage (e.g. "83%-88%") after
-//    hypothetical changes as if it had re-run the ML model. The old
-//    rule ("never invent a score... not listed above") was too vague --
-//    it didn't explicitly cover fabricated *sub*-metrics or predictive
-//    percentages phrased with false precision. Rule 1 and rule 5 below
-//    close that gap.
-//
-// 2. Gemini was replying with full markdown (###, **, >, ---), but the
-//    chat bubble in AIConsultantModal.tsx renders plain text only
-//    (whitespace-pre-line, no markdown parser) -- so users were seeing
-//    literal asterisks/hashes/angle-brackets in the UI. Rule 6 tells
-//    Gemini to stop using markdown syntax entirely.
 // ------------------------------------------------------------
 
 function buildAdvisorSystemInstruction(context: any): string {
@@ -216,11 +191,6 @@ function buildAdvisorSystemInstruction(context: any): string {
 
 // ------------------------------------------------------------
 // Gemini caption generation (Step 3)
-//
-// Reuses the same `ai` client and chats.create()/sendMessage() pattern
-// as /api/chat. Falls back honestly (not silently) when GEMINI_API_KEY
-// is missing or the call fails -- caller must check `source` and never
-// present a non-"gemini" result as if Gemini generated it.
 // ------------------------------------------------------------
 
 async function generateCaptionWithGemini(params: {
@@ -280,6 +250,67 @@ async function generateCaptionWithGemini(params: {
     );
     return { caption: null, source: "error", reason: error?.message || "Gemini API call failed." };
   }
+}
+
+// ------------------------------------------------------------
+// Suggestion verification (NEW)
+//
+// Before any "Apply Suggestion" is shown to the user, verify it against
+// the REAL trained model instead of assuming it helps. parseWindowStartHour
+// mirrors the same parsing logic used in PredictionResult.tsx to turn a
+// recommended window string ("6:00 PM – 9:00 PM") into a 24h start hour.
+// scoreVariant calls the new /api/score-variant endpoint in app.py with
+// the original payload plus one field overridden, and buildImpact turns
+// the resulting probability into a plain before/after delta object.
+// ------------------------------------------------------------
+
+function parseWindowStartHour(window: string | undefined | null): number | null {
+  if (!window) return null;
+  const match = window.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return null;
+  let hour = parseInt(match[1], 10);
+  const period = match[3].toUpperCase();
+  if (period === "AM") {
+    hour = hour === 12 ? 0 : hour;
+  } else {
+    hour = hour === 12 ? 12 : hour + 12;
+  }
+  return hour;
+}
+
+async function scoreVariant(
+  basePayload: Record<string, any>,
+  overrides: Record<string, any>
+): Promise<number | null> {
+  try {
+    const variantPayload = { ...basePayload, ...overrides };
+    const response = await fetch(`${PYTHON_API_URL}/api/score-variant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(variantPayload),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data.success === false) return null;
+    const proba = Number(data.viral_probability);
+    return Number.isFinite(proba) ? proba : null;
+  } catch (error) {
+    console.warn("Suggestion preview scoring failed:", error);
+    return null;
+  }
+}
+
+function buildImpact(originalProbability: number, newProbability: number | null) {
+  if (newProbability === null) return null;
+  const originalPercentage = Math.round(originalProbability * 1000) / 10;
+  const newPercentage = Math.round(newProbability * 1000) / 10;
+  return {
+    original_probability: originalProbability,
+    new_probability: newProbability,
+    original_percentage: originalPercentage,
+    new_percentage: newPercentage,
+    delta_points: Math.round((newPercentage - originalPercentage) * 10) / 10,
+  };
 }
 
 // ------------------------------------------------------------
@@ -466,6 +497,66 @@ app.post("/api/predict", async (req, res) => {
           geminiResult.reason || "";
       }
     }
+
+    // --------------------------------------------------------
+    // NEW: verify every concrete "Apply Suggestion" against the real
+    // model before presenting it. This runs AFTER the Gemini caption
+    // swap above, so if Gemini generated the final caption, THAT is
+    // what gets scored -- not the stale Python template. Each of these
+    // reuses the same imageBase64/follower_count/etc as the original
+    // request, changing only the one field being tested, so the delta
+    // isolates the effect of that specific suggestion.
+    // --------------------------------------------------------
+
+    if (recommendationReport) {
+      const previewBase = { ...predictionPayload };
+
+      const [captionImpactProb, hashtagImpactProb, postingTimeImpactProb] =
+        await Promise.all([
+          recommendationReport.caption_analysis?.ai_suggested_caption &&
+          recommendationReport.caption_analysis.ai_suggested_caption !==
+            predictionPayload.caption
+            ? scoreVariant(previewBase, {
+                caption: recommendationReport.caption_analysis.ai_suggested_caption,
+              })
+            : Promise.resolve(null),
+
+          Array.isArray(recommendationReport.suggested_hashtags?.recommended) &&
+          recommendationReport.suggested_hashtags.recommended.length > 0
+            ? scoreVariant(previewBase, {
+                hashtags: recommendationReport.suggested_hashtags.recommended.join(", "),
+                keywords: recommendationReport.suggested_hashtags.recommended.join(", "),
+              })
+            : Promise.resolve(null),
+
+          recommendationReport.posting_time?.performance === "Outside Suggested Window"
+            ? (() => {
+                const startHour = parseWindowStartHour(
+                  recommendationReport.posting_time?.recommended_window
+                );
+                return startHour !== null
+                  ? scoreVariant(previewBase, { post_hour: startHour })
+                  : Promise.resolve(null);
+              })()
+            : Promise.resolve(null),
+        ]);
+
+      if (recommendationReport.caption_analysis) {
+        const impact = buildImpact(viralProbability, captionImpactProb);
+        if (impact) recommendationReport.caption_analysis.predicted_impact = impact;
+      }
+
+      if (recommendationReport.suggested_hashtags) {
+        const impact = buildImpact(viralProbability, hashtagImpactProb);
+        if (impact) recommendationReport.suggested_hashtags.predicted_impact = impact;
+      }
+
+      if (recommendationReport.posting_time) {
+        const impact = buildImpact(viralProbability, postingTimeImpactProb);
+        if (impact) recommendationReport.posting_time.predicted_impact = impact;
+      }
+    }
+
     // --------------------------------------------------------
     // Get recommendation information
     // --------------------------------------------------------

@@ -67,6 +67,21 @@ export interface BackendPrediction {
 }
 
 // =============================
+// Suggestion verification (NEW)
+// =============================
+// Attached by server.ts, after actually re-running the trained model
+// with the suggested change applied. Never assume a suggestion helps --
+// this is the real, verified before/after delta.
+
+export interface PredictedImpact {
+  original_probability: number;
+  new_probability: number;
+  original_percentage: number;
+  new_percentage: number;
+  delta_points: number;
+}
+
+// =============================
 // Caption Analysis
 // =============================
 
@@ -88,6 +103,8 @@ export interface CaptionAnalysis {
   // configured), or "error" (Gemini call failed, template kept as-is).
   caption_source?: "gemini" | "unavailable" | "error";
   caption_source_note?: string;
+  // Real, model-verified impact of applying ai_suggested_caption.
+  predicted_impact?: PredictedImpact;
 }
 
 // =============================
@@ -98,6 +115,9 @@ export interface HashtagAnalysis {
   current: string[];
   recommended: string[];
   reason: string;
+  // Real, model-verified impact of applying `recommended` as the post's
+  // hashtags.
+  predicted_impact?: PredictedImpact;
 }
 
 // =============================
@@ -110,6 +130,10 @@ export interface PostingTimeAnalysis {
   performance: string;
   recommended_window: string;
   reason: string;
+  // Real, model-verified impact of moving to the start of
+  // recommended_window. Only present when performance was "Outside
+  // Suggested Window".
+  predicted_impact?: PredictedImpact;
 }
 
 // =============================

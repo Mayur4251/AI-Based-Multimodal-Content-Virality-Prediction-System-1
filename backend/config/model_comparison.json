@@ -1,34 +1,42 @@
 [
   {
-    "model":"Random Forest",
-    "accuracy":0.6563,
-    "precision":0.6267,
-    "recall":0.4879,
-    "f1_score":0.5486,
-    "roc_auc":0.7168
+    "model":"Random Forest (tuned)",
+    "accuracy":0.8862,
+    "precision":0.7914,
+    "recall":0.74,
+    "f1_score":0.7649,
+    "roc_auc":0.947
   },
   {
-    "model":"SVM",
-    "accuracy":0.6637,
-    "precision":0.6157,
-    "recall":0.5709,
-    "f1_score":0.5925,
-    "roc_auc":0.7159
+    "model":"Extra Trees (tuned)",
+    "accuracy":0.8213,
+    "precision":0.7568,
+    "recall":0.42,
+    "f1_score":0.5402,
+    "roc_auc":0.8875
   },
   {
-    "model":"XGBoost",
-    "accuracy":0.6341,
-    "precision":0.5761,
-    "recall":0.5502,
-    "f1_score":0.5628,
-    "roc_auc":0.6786
+    "model":"XGBoost (tuned)",
+    "accuracy":0.9313,
+    "precision":0.8372,
+    "recall":0.9,
+    "f1_score":0.8675,
+    "roc_auc":0.9796
   },
   {
-    "model":"Ensemble (Voting)",
-    "accuracy":0.6593,
-    "precision":0.63,
-    "recall":0.4948,
-    "f1_score":0.5543,
-    "roc_auc":0.7119
+    "model":"CatBoost (tuned)",
+    "accuracy":0.9269,
+    "precision":0.8253,
+    "recall":0.8975,
+    "f1_score":0.8599,
+    "roc_auc":0.9771
+  },
+  {
+    "model":"Stacking Ensemble",
+    "accuracy":0.8694,
+    "precision":0.8282,
+    "recall":0.6025,
+    "f1_score":0.6975,
+    "roc_auc":0.9331
   }
 ]
