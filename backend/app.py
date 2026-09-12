@@ -170,6 +170,7 @@ def _build_image_analysis(image_features: dict) -> dict:
 
 @app.post("/api/predict")
 def predict(data: PredictionRequest):
+    try:
         ml_payload = {
             "caption": data.caption,
             "post_hour": data.post_hour,

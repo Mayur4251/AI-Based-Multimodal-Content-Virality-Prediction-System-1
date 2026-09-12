@@ -253,15 +253,19 @@ async function generateCaptionWithGemini(params: {
 }
 
 // ------------------------------------------------------------
-// Suggestion verification (NEW)
+// Suggestion verification
 //
 // Before any "Apply Suggestion" is shown to the user, verify it against
 // the REAL trained model instead of assuming it helps. parseWindowStartHour
 // mirrors the same parsing logic used in PredictionResult.tsx to turn a
 // recommended window string ("6:00 PM – 9:00 PM") into a 24h start hour.
-// scoreVariant calls the new /api/score-variant endpoint in app.py with
-// the original payload plus one field overridden, and buildImpact turns
-// the resulting probability into a plain before/after delta object.
+// scoreVariant calls the /api/score-variant endpoint in app.py with the
+// original payload plus one field overridden, and buildImpact turns the
+// resulting probability into a plain before/after delta object.
+//
+// IMPORTANT: callers of scoreVariant() must invoke it SEQUENTIALLY, one
+// at a time -- never via Promise.all. See the comment inside the
+// /api/predict handler below for why.
 // ------------------------------------------------------------
 
 function parseWindowStartHour(window: string | undefined | null): number | null {
@@ -499,47 +503,62 @@ app.post("/api/predict", async (req, res) => {
     }
 
     // --------------------------------------------------------
-    // NEW: verify every concrete "Apply Suggestion" against the real
-    // model before presenting it. This runs AFTER the Gemini caption
-    // swap above, so if Gemini generated the final caption, THAT is
-    // what gets scored -- not the stale Python template. Each of these
+    // Verify every concrete "Apply Suggestion" against the real model
+    // before presenting it. This runs AFTER the Gemini caption swap
+    // above, so if Gemini generated the final caption, THAT is what
+    // gets scored -- not the stale Python template. Each of these
     // reuses the same imageBase64/follower_count/etc as the original
     // request, changing only the one field being tested, so the delta
     // isolates the effect of that specific suggestion.
+    //
+    // FIX: these three checks now run ONE AT A TIME (sequential awaits)
+    // instead of via Promise.all. Firing all three /api/score-variant
+    // requests at once meant they all hit the SAME in-process trained
+    // model objects concurrently -- the ensemble/XGBoost model is not
+    // guaranteed thread-safe for concurrent predict_proba calls, which
+    // was causing two genuinely different suggestions (e.g. a caption
+    // rewrite and a hashtag swap) to sometimes come back with the exact
+    // same "verified" probability, because the concurrent calls were
+    // corrupting each other's results rather than measuring the real
+    // effect of either change. Sequential calls remove that race
+    // entirely, at the cost of a few hundred extra milliseconds per
+    // prediction -- correctness here matters far more than that cost.
     // --------------------------------------------------------
 
     if (recommendationReport) {
       const previewBase = { ...predictionPayload };
 
-      const [captionImpactProb, hashtagImpactProb, postingTimeImpactProb] =
-        await Promise.all([
-          recommendationReport.caption_analysis?.ai_suggested_caption &&
-          recommendationReport.caption_analysis.ai_suggested_caption !==
-            predictionPayload.caption
-            ? scoreVariant(previewBase, {
-                caption: recommendationReport.caption_analysis.ai_suggested_caption,
-              })
-            : Promise.resolve(null),
+      let captionImpactProb: number | null = null;
+      if (
+        recommendationReport.caption_analysis?.ai_suggested_caption &&
+        recommendationReport.caption_analysis.ai_suggested_caption !==
+          predictionPayload.caption
+      ) {
+        captionImpactProb = await scoreVariant(previewBase, {
+          caption: recommendationReport.caption_analysis.ai_suggested_caption,
+        });
+      }
 
-          Array.isArray(recommendationReport.suggested_hashtags?.recommended) &&
-          recommendationReport.suggested_hashtags.recommended.length > 0
-            ? scoreVariant(previewBase, {
-                hashtags: recommendationReport.suggested_hashtags.recommended.join(", "),
-                keywords: recommendationReport.suggested_hashtags.recommended.join(", "),
-              })
-            : Promise.resolve(null),
+      let hashtagImpactProb: number | null = null;
+      if (
+        Array.isArray(recommendationReport.suggested_hashtags?.recommended) &&
+        recommendationReport.suggested_hashtags.recommended.length > 0
+      ) {
+        hashtagImpactProb = await scoreVariant(previewBase, {
+          hashtags: recommendationReport.suggested_hashtags.recommended.join(", "),
+          keywords: recommendationReport.suggested_hashtags.recommended.join(", "),
+        });
+      }
 
-          recommendationReport.posting_time?.performance === "Outside Suggested Window"
-            ? (() => {
-                const startHour = parseWindowStartHour(
-                  recommendationReport.posting_time?.recommended_window
-                );
-                return startHour !== null
-                  ? scoreVariant(previewBase, { post_hour: startHour })
-                  : Promise.resolve(null);
-              })()
-            : Promise.resolve(null),
-        ]);
+      let postingTimeImpactProb: number | null = null;
+      if (recommendationReport.posting_time?.performance === "Outside Suggested Window") {
+        const startHour = parseWindowStartHour(
+          recommendationReport.posting_time?.recommended_window
+        );
+        if (startHour !== null) {
+          postingTimeImpactProb = await scoreVariant(previewBase, { post_hour: startHour });
+        }
+      }
 
       if (recommendationReport.caption_analysis) {
         const impact = buildImpact(viralProbability, captionImpactProb);
