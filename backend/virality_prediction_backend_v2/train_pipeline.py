@@ -34,7 +34,7 @@ RANDOM_STATE = 42
 # 1. LOAD + CLEAN (unchanged from v1)
 # --------------------------------------------------------------------------
 print("Loading raw dataset...")
-df = pd.read_csv("/mnt/user-data/uploads/posts_merged_dataset.csv")
+df = pd.read_csv("data/posts_merged_dataset.csv")
 before = len(df)
 df = df.drop_duplicates(subset="post_id").reset_index(drop=True)
 df = df.dropna(subset=["caption", "viral"]).reset_index(drop=True)
@@ -213,30 +213,35 @@ print(confusion_matrix(y_test, best_model.predict(X_test)))
 # 9. SAVE ARTIFACTS (same file names/structure as before -> backend untouched)
 # --------------------------------------------------------------------------
 print("\nSaving artifacts (same structure as before)...")
-joblib.dump(rf_best, "/home/claude/work/model_random_forest.joblib")
-joblib.dump(xgb_best, "/home/claude/work/model_xgboost.joblib")
-joblib.dump(et_best, "/home/claude/work/model_extra_trees.joblib")
-joblib.dump(cat_best, "/home/claude/work/model_catboost.joblib")
-joblib.dump(stack, "/home/claude/work/model_ensemble.joblib")  # same name inference.py expects
-joblib.dump(tfidf, "/home/claude/work/vectorizer_tfidf.joblib")
-joblib.dump(scaler, "/home/claude/work/scaler_metadata.joblib")
-joblib.dump(ohe, "/home/claude/work/encoder_categorical.joblib")
+# =========================
+# Save artifacts
+# =========================
 
-with open("/home/claude/work/feature_names.json", "w") as f:
-    json.dump(feature_names, f)
-with open("/home/claude/work/schema.json", "w") as f:
-    json.dump({
-        "text_column": "caption",
-        "metadata_numeric_columns": meta_numeric,
-        "sentiment_columns": list(sent.columns),
-        "categorical_columns": ["media_type", "content_category"],
-        "target_column": "viral",
-        "dropped_leakage_columns": LEAK_COLS,
-        "best_model": best_row["model"],
-    }, f, indent=2)
+OUTPUT_DIR = "virality_prediction_backend_v2"
 
-results_df.to_csv("/home/claude/work/model_comparison_v2.csv", index=False)
-results_df.to_json("/home/claude/work/model_comparison_v2.json", orient="records", indent=2)
-df.to_csv("/home/claude/work/posts_cleaned.csv", index=False)
+joblib.dump(rf_best, f"{OUTPUT_DIR}/model_random_forest.joblib")
+joblib.dump(xgb_best, f"{OUTPUT_DIR}/model_xgboost.joblib")
+joblib.dump(et_best, f"{OUTPUT_DIR}/model_extra_trees.joblib")
+joblib.dump(cat_best, f"{OUTPUT_DIR}/model_catboost.joblib")
+joblib.dump(stack, f"{OUTPUT_DIR}/model_ensemble.joblib")
+
+joblib.dump(tfidf, f"{OUTPUT_DIR}/vectorizer_tfidf.joblib")
+joblib.dump(scaler, f"{OUTPUT_DIR}/scaler_metadata.joblib")
+joblib.dump(ohe, f"{OUTPUT_DIR}/encoder_categorical.joblib")
+
+with open(f"{OUTPUT_DIR}/feature_names.json", "w") as f:
+    json.dump(feature_names, f, indent=2)
+
+with open(f"{OUTPUT_DIR}/schema.json", "w") as f:
+    json.dump(schema, f, indent=2)
+
+results_df.to_csv(f"{OUTPUT_DIR}/model_comparison_v2.csv", index=False)
+results_df.to_json(
+    f"{OUTPUT_DIR}/model_comparison_v2.json",
+    orient="records",
+    indent=2
+)
+
+df.to_csv(f"{OUTPUT_DIR}/posts_cleaned.csv", index=False)
 
 print("\nDone. Best model saved as model_ensemble.joblib (drop-in replacement, inference.py unchanged).")

@@ -1,0 +1,5 @@
+model,accuracy,precision,recall,f1_score,roc_auc
+Random Forest,0.8981,0.7869,0.8125,0.7995,0.9584
+SVM,0.8794,0.6878,0.9475,0.7971,0.9637
+XGBoost,0.9369,0.8501,0.9075,0.8779,0.9815
+Ensemble (RF+SVM+XGB voting) - per report,0.9394,0.8668,0.895,0.8807,0.9773

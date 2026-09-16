@@ -1,0 +1,40 @@
+{
+  "text_column": "caption",
+  "metadata_numeric_columns": [
+    "post_hour",
+    "day_of_week",
+    "follower_count",
+    "early_likes",
+    "early_shares",
+    "early_comments",
+    "saves",
+    "reach",
+    "impressions",
+    "caption_len",
+    "caption_word_count",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "total_early_engagement",
+    "engagement_per_follower",
+    "likes_share_of_engagement",
+    "shares_per_reach",
+    "log_follower_count",
+    "log_reach",
+    "sent_neg",
+    "sent_neu",
+    "sent_pos",
+    "sent_compound"
+  ],
+  "categorical_columns": [
+    "media_type",
+    "content_category"
+  ],
+  "target_column": "viral",
+  "dropped_leakage_columns": [
+    "engagement_rate",
+    "performance_bucket_label"
+  ],
+  "best_model": "Ensemble (Random Forest + SVM + XGBoost, soft voting) - per report spec"
+}
