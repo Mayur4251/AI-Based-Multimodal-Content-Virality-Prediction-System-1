@@ -180,11 +180,19 @@ def predict_virality_fusion(post: dict, image_path: str) -> dict:
     img = load_img(image_path, target_size=(_CNN_IMG_SIZE, _CNN_IMG_SIZE))
     arr = np.expand_dims(img_to_array(img), axis=0)
     emb = embed_model.predict(arr, verbose=0)  # (1, 64)
+    if emb.shape[1] != 64:
+        raise ValueError(f"CNN embedding mismatch: expected 64 features, got {emb.shape[1]}")
 
     tab = _row_to_features(post).toarray()  # (1, 288), same pipeline as predict_virality
-    fused = scaler.transform(np.hstack([emb, tab]))
+    if tab.shape[1] != 288:
+        raise ValueError(f"Tabular feature mismatch: expected 288 features, got {tab.shape[1]}")
 
-    proba = float(model.predict_proba(fused)[0, 1])
+    fused = np.hstack([emb, tab])
+    if fused.shape[1] != 352:
+        raise ValueError(f"Fusion vector mismatch: expected 352 features, got {fused.shape[1]}")
+
+    fused_scaled = scaler.transform(fused)
+    proba = float(model.predict_proba(fused_scaled)[0, 1])
     return {"viral": int(proba >= 0.5), "viral_probability": round(proba, 4), "model": "fusion_xgb"}
 
 

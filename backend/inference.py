@@ -149,6 +149,13 @@ _IMG_COLS = _SCHEMA.get("image_feature_columns", [])
 
 _MODELS = {"random_forest": _rf, "svm": _svm, "xgboost": _xgb, "ensemble": _ensemble}
 
+_FUSION_TFIDF = joblib.load(MODEL_DIR / "vectorizer_tfidf_fusion.joblib")
+_FUSION_SCALER_METADATA = joblib.load(MODEL_DIR / "scaler_metadata_fusion.joblib")
+_FUSION_OHE = joblib.load(MODEL_DIR / "encoder_categorical_fusion.joblib")
+_FUSION_VARIANCE_FILTER = joblib.load(MODEL_DIR / "variance_filter_fusion.joblib")
+_FUSION_META_NUMERIC = list(_FUSION_SCALER_METADATA.feature_names_in_)
+_FUSION_CAT_COLS = ["media_type", "content_category"]
+
 # Process-wide lock guarding every call into a loaded model's
 # predict_proba(). See the "WHAT CHANGED (v4)" docstring above for why
 # this exists -- do not remove it, and do not narrow its scope to "just
@@ -240,6 +247,61 @@ def _row_to_features(post: dict) -> Tuple[sparse.csr_matrix, Dict[str, float], b
     ).tocsr()
 
     return feature_matrix, image_features, image_analysis_available
+
+
+def _row_to_fusion_features(post: dict) -> sparse.csr_matrix:
+    """Build the tabular block with the transformers fitted for fusion."""
+    caption = str(post.get("caption", "")).strip()
+    post_hour = post.get("post_hour", 0)
+    day_of_week = post.get("day_of_week", 0)
+    follower_count = post.get("follower_count", 0)
+    early_likes = post.get("early_likes", 0)
+    early_shares = post.get("early_shares", 0)
+    early_comments = post.get("early_comments", 0)
+    saves = post.get("saves", 0)
+    reach = post.get("reach", 0)
+    impressions = post.get("impressions", 0)
+
+    total_eng = early_likes + early_shares + early_comments + saves
+    row = {
+        "post_hour": post_hour,
+        "day_of_week": day_of_week,
+        "follower_count": follower_count,
+        "early_likes": early_likes,
+        "early_shares": early_shares,
+        "early_comments": early_comments,
+        "saves": saves,
+        "reach": reach,
+        "impressions": impressions,
+        "caption_len": len(caption),
+        "caption_word_count": len(caption.split()),
+        "hour_sin": np.sin(2 * np.pi * post_hour / 24),
+        "hour_cos": np.cos(2 * np.pi * post_hour / 24),
+        "dow_sin": np.sin(2 * np.pi * day_of_week / 7),
+        "dow_cos": np.cos(2 * np.pi * day_of_week / 7),
+        "total_early_engagement": total_eng,
+        "engagement_per_follower": total_eng / (follower_count + 1),
+        "likes_share_of_engagement": early_likes / (total_eng + 1),
+        "shares_per_reach": early_shares / (reach + 1),
+        "log_follower_count": np.log1p(follower_count),
+        "log_reach": np.log1p(reach),
+    }
+    sentiment = _sia.polarity_scores(caption)
+    row.update({f"sent_{key}": value for key, value in sentiment.items()})
+
+    meta_df = pd.DataFrame([row])[_FUSION_META_NUMERIC]
+    meta_scaled = _FUSION_SCALER_METADATA.transform(meta_df)
+    cat_df = pd.DataFrame([{
+        "media_type": post.get("media_type", "image"),
+        "content_category": post.get("content_category", "Lifestyle"),
+    }])[_FUSION_CAT_COLS]
+    cat_matrix = _FUSION_OHE.transform(cat_df)
+    features = sparse.hstack([
+        _FUSION_TFIDF.transform([caption]),
+        sparse.csr_matrix(meta_scaled),
+        cat_matrix,
+    ]).tocsr()
+    return _FUSION_VARIANCE_FILTER.transform(features)
 
 
 def predict_virality(post: dict, model: str = "ensemble") -> dict:
@@ -532,10 +594,20 @@ def predict_virality_fusion(
     with _PREDICT_LOCK:
         emb = embed_model.predict(arr, verbose=0)  # shape (1, 64)
 
-    tab_sparse, image_features, image_analysis_available = _row_to_features(post)
+    tab_sparse = _row_to_fusion_features(post)
     tab = tab_sparse.toarray()  # shape (1, 288)
+    image_features, image_analysis_available = extract_from_base64_with_status(
+        post.get("imageBase64", "")
+    )
+
+    if emb.shape[1] != 64:
+        raise ValueError(f"CNN embedding mismatch: expected 64 features, got {emb.shape[1]}")
+    if tab.shape[1] != 288:
+        raise ValueError(f"Tabular feature mismatch: expected 288 features, got {tab.shape[1]}")
 
     fused = np.hstack([emb, tab])  # shape (1, 352)
+    if fused.shape[1] != 352:
+        raise ValueError(f"Fusion vector mismatch: expected 352 features, got {fused.shape[1]}")
     fused_scaled = fusion_scaler.transform(fused)
 
     with _PREDICT_LOCK:
